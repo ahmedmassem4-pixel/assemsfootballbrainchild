@@ -67,6 +67,8 @@ st.markdown("""
 # ── Helpers ────────────────────────────────────────────────────────────────────
 PYRAMID_FILE   = "Egyptian_Football_Pyramid.xlsx"
 STARTERS_FILE  = "Starters_team_breakdown.xlsx"
+CAF_FILE         = "caf_index_v3.xlsx"
+URBAN_POP_FILE   = "egypt_populations_final.csv"
 
 PLOTLY_THEME = dict(
     template="plotly_white",
@@ -174,6 +176,29 @@ def load_pyramid():
     for c in numeric_cols:
         if c in govs.columns:
             govs[c] = pd.to_numeric(govs[c], errors="coerce")
+    # Merge urban population data
+    try:
+        upop = pd.read_csv("egypt_populations_final.csv")
+        upop = upop[upop["Governorate"] != "Total"].copy()
+        upop["Governorate"] = upop["Governorate"].str.strip().str.replace("]","",regex=False)
+        name_fix = {"Daqahlia":"Dakahlia","Qalyoubeua":"Qalyubia","Monofia":"Menoufia",
+                    "Beheira":"Beheira","Assyut":"Assiut","Sharqia":"Sharkia"}
+        upop["Governorate"] = upop["Governorate"].replace(name_fix)
+        upop["Urban_Pct"] = (upop["Urban_Total"] / upop["Total_Population"] * 100).round(1)
+        govs = govs.merge(upop[["Governorate","Urban_Total","Rural_Total","Urban_Pct"]], on="Governorate", how="left")
+        # Recompute overperformance index incorporating urban population
+        def minmax_s(s):
+            mn,mx = s.min(), s.max()
+            return (s-mn)/(mx-mn) if mx!=mn else pd.Series([0.5]*len(s), index=s.index)
+        if "GDP per capita" in govs.columns and "Score" in govs.columns:
+            govs["Urban_Score"] = minmax_s(govs["Urban_Pct"].fillna(govs["Urban_Pct"].median()))
+            govs["GDP_Score"]   = minmax_s(govs["GDP per capita"].fillna(0))
+            govs["Pop_Score"]   = minmax_s(govs["Population"].fillna(0))
+            govs["Economic_Weight"] = (govs["Urban_Score"]*0.40 + govs["GDP_Score"]*0.40 + govs["Pop_Score"]*0.20)
+            govs["Football_Weight"] = minmax_s(govs["Score"].fillna(0))
+            govs["Overperformance_v2"] = (govs["Football_Weight"] - govs["Economic_Weight"]).round(4)
+    except Exception:
+        pass
 
     # District sheet: row 0 = title, row 1 = blank, row 2 = headers, row 3+ = data
     dist_raw = xl.parse("Official By District", header=None)
@@ -201,6 +226,51 @@ def load_pyramid():
     players["Birth_Month"] = players["DOB"].apply(parse_birth_month)
 
     return clubs, govs, districts, players
+
+@st.cache_data
+def load_caf():
+    if not os.path.exists(CAF_FILE):
+        return None
+    xl = pd.ExcelFile(CAF_FILE)
+    ov  = xl.parse("Overperformance",      header=1)
+    fi  = xl.parse("Football Index",        header=1)
+    ei  = xl.parse("Economic Index",        header=1)
+    ped = xl.parse("Tournament Pedigree",   header=1)
+    # Merge overperformance + football component scores + economic index
+    fi_cols = ["Country","Football Index"] + [c for c in fi.columns
+               if c in ["FIFA Men","FIFA Women","Assoc Points","Infrastructure",
+                        "Youth Score","Export Vol","Export Quality","Pedigree"]]
+    df = ov.merge(fi[[c for c in fi_cols if c in fi.columns]],
+                  on="Country", how="left", suffixes=("","_fi"))
+    df = df.merge(ei[["Country","Economic Index"]], on="Country", how="left", suffixes=("","_ei"))
+    df = df.rename(columns={"Country":"COUNTRY"})
+    for c in df.columns:
+        if df[c].dtype == object and c not in ["COUNTRY","Zone","Classification"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    # Clean pedigree sheet
+    ped = ped.dropna(subset=["Country"])
+    ped = ped[ped["Country"].astype(str).str.strip() != "Country"]
+    ped = ped[~ped["Country"].astype(str).str.startswith("Colour")]
+    for c in ["Pedigree Score","AFCON Score","WC Score"]:
+        if c in ped.columns:
+            ped[c] = pd.to_numeric(ped[c], errors="coerce")
+    return df, ped
+
+@st.cache_data
+def load_urban():
+    if not os.path.exists(URBAN_POP_FILE):
+        return None
+    df = pd.read_csv(URBAN_POP_FILE)
+    df = df[df["Governorate"] != "Total"].copy()
+    # Fix known name issues
+    df["Governorate"] = df["Governorate"].str.strip().str.replace("]","",regex=False)
+    name_fix = {
+        "Daqahlia":"Dakahlia","Qalyoubeua":"Qalyubia","Monofia":"Menoufia",
+        "Beheira":"Beheira","Assyut":"Assiut","Sharqia":"Sharkia",
+    }
+    df["Governorate"] = df["Governorate"].replace(name_fix)
+    df["Urban_Pct"] = (df["Urban_Total"] / df["Total_Population"] * 100).round(1)
+    return df
 
 @st.cache_data
 def load_starters():
@@ -243,7 +313,7 @@ def load_starters():
     return ssn, gov_cols
 
 # ── Sidebar navigation ─────────────────────────────────────────────────────────
-PAGES = [
+EGYPT_PAGES = [
     "Overview",
     "Pyramid Map",
     "Governorate Intelligence",
@@ -251,23 +321,60 @@ PAGES = [
     "Player Origins",
     "Starter Pipeline",
 ]
+AFRICA_PAGES = [
+    "CAF Overperformance Index",
+    "CAF Tournament Pedigree",
+]
+PAGES = EGYPT_PAGES + AFRICA_PAGES
 
 with st.sidebar:
     st.markdown("""
-    <div style='padding: 16px 0 24px; border-bottom: 1px solid #e5e7eb; margin-bottom: 16px;'>
-      <div style='font-size:1.3rem; font-weight:700; color:#1e3a5f;'>🏟️ EG Football</div>
-      <div style='font-size:0.75rem; color:#6b7280; margin-top:4px; font-family:Georgia,serif;'>Football Intelligence · MVP</div>
+    <div style='padding:14px 0 18px; border-bottom:1px solid #e5e7eb; margin-bottom:14px;'>
+      <div style='font-size:1.15rem; font-weight:700; color:#1e3a5f; font-family:Georgia,serif;'>
+        Assem's Football Brainchild
+      </div>
+      <div style='font-size:0.72rem; color:#6b7280; margin-top:4px; font-family:Georgia,serif;
+                  letter-spacing:0.04em; text-transform:uppercase;'>
+        Egypt · Africa · Intelligence
+      </div>
+    </div>
+    <div style='font-size:0.7rem; font-weight:600; color:#9ca3af; text-transform:uppercase;
+                letter-spacing:0.08em; padding: 4px 0 6px; font-family:Georgia,serif;'>
+      Egypt Analysis
     </div>
     """, unsafe_allow_html=True)
 
-    page = st.radio("", PAGES, label_visibility="collapsed")
+    egypt_page = st.radio("Egypt", EGYPT_PAGES, label_visibility="collapsed")
+
+    st.markdown("""
+    <div style='font-size:0.7rem; font-weight:600; color:#9ca3af; text-transform:uppercase;
+                letter-spacing:0.08em; padding:16px 0 6px; border-top:1px solid #e5e7eb;
+                font-family:Georgia,serif;'>
+      Africa Analysis
+    </div>
+    """, unsafe_allow_html=True)
+
+    africa_page = st.radio("Africa", AFRICA_PAGES, label_visibility="collapsed")
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("""
-    <div style='font-size:0.7rem; color:#9ca3af; padding: 8px 0; border-top: 1px solid #e5e7eb;'>
-      Data: 1986–2026 · Updated manually
+    <div style='font-size:0.68rem; color:#9ca3af; padding:8px 0;
+                border-top:1px solid #e5e7eb; font-family:Georgia,serif;'>
+      Data: 1986–2026 · Manually compiled
     </div>
     """, unsafe_allow_html=True)
+
+# Determine active page using session state to track last interaction
+if "last_eg" not in st.session_state: st.session_state["last_eg"] = egypt_page
+if "last_af" not in st.session_state: st.session_state["last_af"] = africa_page
+if egypt_page != st.session_state["last_eg"]:
+    st.session_state["last_eg"] = egypt_page
+    page = egypt_page
+elif africa_page != st.session_state["last_af"]:
+    st.session_state["last_af"] = africa_page
+    page = africa_page
+else:
+    page = st.session_state.get("last_eg","Overview")
 
 # ── Load data ──────────────────────────────────────────────────────────────────
 missing = [f for f in [PYRAMID_FILE, STARTERS_FILE] if not os.path.exists(f)]
@@ -277,20 +384,60 @@ if missing:
 
 clubs, govs, districts, players = load_pyramid()
 ssn_df, gov_cols = load_starters()
+caf_result = load_caf()
+caf_df, ped_df = caf_result if caf_result else (None, None)
+urban_df = load_urban()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — OVERVIEW
 # ══════════════════════════════════════════════════════════════════════════════
 if page == PAGES[0]:
-    st.markdown("## Assem's Football Brainchild")
-    st.markdown("<div style='color:#6b7280; margin-bottom:24px;'>A comprehensive view of football geography, talent pipelines and regional performance across Egypt.</div>", unsafe_allow_html=True)
+    # Hero header
+    st.markdown("""
+    <div style='background:linear-gradient(135deg,#1e3a5f 0%,#1d4ed8 100%);
+                border-radius:12px; padding:32px 36px; margin-bottom:28px;'>
+      <div style='font-size:2rem; font-weight:700; color:#ffffff; font-family:Georgia,serif;
+                  margin-bottom:8px;'>Assem's Football Brainchild</div>
+      <div style='font-size:1rem; color:#bfdbfe; font-family:Georgia,serif; max-width:640px;
+                  line-height:1.6;'>
+        A comprehensive football intelligence model covering <b style="color:#fff;">Egypt</b> —
+        its pyramid, governorates, player origins and talent pipeline — and
+        <b style="color:#fff;">Africa</b> — a 54-nation index measuring football output
+        against economic potential.
+      </div>
+      <div style='margin-top:20px; display:flex; gap:24px; flex-wrap:wrap;'>
+        <div style='background:rgba(255,255,255,0.12); border-radius:8px; padding:10px 18px;'>
+          <div style='font-size:0.7rem; color:#93c5fd; text-transform:uppercase;
+                      letter-spacing:0.08em; font-family:Georgia,serif;'>Egypt scope</div>
+          <div style='font-size:0.95rem; color:#fff; font-family:Georgia,serif; margin-top:3px;'>
+            Clubs · Governorates · Districts · Players · Starters
+          </div>
+        </div>
+        <div style='background:rgba(255,255,255,0.12); border-radius:8px; padding:10px 18px;'>
+          <div style='font-size:0.7rem; color:#93c5fd; text-transform:uppercase;
+                      letter-spacing:0.08em; font-family:Georgia,serif;'>Africa scope</div>
+          <div style='font-size:0.95rem; color:#fff; font-family:Georgia,serif; margin-top:3px;'>
+            54 CAF nations · Overperformance Index · Tournament Pedigree
+          </div>
+        </div>
+        <div style='background:rgba(255,255,255,0.12); border-radius:8px; padding:10px 18px;'>
+          <div style='font-size:0.7rem; color:#93c5fd; text-transform:uppercase;
+                      letter-spacing:0.08em; font-family:Georgia,serif;'>Time span</div>
+          <div style='font-size:0.95rem; color:#fff; font-family:Georgia,serif; margin-top:3px;'>
+            1986 – 2026 · Manually compiled
+          </div>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
+    st.markdown("### Egypt at a glance")
     c1, c2, c3, c4, c5 = st.columns(5)
     metrics = [
-        (len(clubs[clubs["Category"]=="Men"]),        "Men's clubs across 3 tiers"),
-        (len(clubs[clubs["Category"]=="Women"]),      "Women's Super League clubs"),
+        (len(clubs[clubs["Category"]=="Men"]),        "Men's clubs, 3 tiers"),
+        (len(clubs[clubs["Category"]=="Women"]),      "Women's Super League"),
         (len(clubs[clubs["Category"]=="Futsal"]),     "Futsal League clubs"),
-        (len(players.dropna(subset=["Name"])),        "International players tracked"),
+        (len(players.dropna(subset=["Name"])),        "Internationals tracked"),
         (int(ssn_df["TOTAL"].sum()) if "TOTAL" in ssn_df.columns else 536,
                                                        "Starting berths 1986–2026"),
     ]
@@ -301,6 +448,27 @@ if page == PAGES[0]:
               <div class='metric-value'>{val}</div>
               <div class='metric-label'>{label}</div>
             </div>""", unsafe_allow_html=True)
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("### Africa at a glance")
+    if caf_df is not None:
+        top_over = caf_df.loc[caf_df["Overperformance"].idxmax(), "COUNTRY"]
+        top_foot = caf_df.loc[caf_df["Football Index"].idxmax(), "COUNTRY"]
+        top_under = caf_df.loc[caf_df["Overperformance"].idxmin(), "COUNTRY"]
+        n_over = int((caf_df["Overperformance"] > 0.08).sum())
+        a1,a2,a3,a4 = st.columns(4)
+        for col,(val,label) in zip([a1,a2,a3,a4],[
+            (54,           "CAF nations indexed"),
+            (top_foot,     "Top football index"),
+            (top_over,     "Biggest overperformer"),
+            (top_under,    "Biggest underperformer"),
+        ]):
+            with col:
+                st.markdown(f"""
+                <div class='metric-card'>
+                  <div class='metric-value' style='font-size:1.4rem;'>{val}</div>
+                  <div class='metric-label'>{label}</div>
+                </div>""", unsafe_allow_html=True)
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -345,7 +513,7 @@ if page == PAGES[0]:
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 2 — PYRAMID MAP
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == PAGES[1]:
+elif page == "Pyramid Map" or (page not in AFRICA_PAGES and egypt_page == "Pyramid Map"):
     st.markdown("## The Football Pyramid")
     st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>All clubs across the top three men's tiers, Women's Super League and Futsal League.</div>", unsafe_allow_html=True)
 
@@ -416,52 +584,88 @@ elif page == PAGES[1]:
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 3 — GOVERNORATE INTELLIGENCE
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == PAGES[2]:
+elif page == "Governorate Intelligence" or egypt_page == "Governorate Intelligence":
     st.markdown("## Governorate Intelligence")
-    st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>Football representation vs. economic and demographic weight. The overperformance index shows which governorates produce more than their GDP and population predict.</div>", unsafe_allow_html=True)
+    st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>Football representation vs. economic and demographic weight — including urban population as an economic metric.</div>", unsafe_allow_html=True)
 
-    col_m1, col_m2, col_m3 = st.columns(3)
-    if "Overperformance Index" in govs.columns:
-        top_over = govs.nlargest(1,"Overperformance Index")["Governorate"].values[0]
-        top_score = govs.nlargest(1,"Score")["Governorate"].values[0]
-        gdp_low = govs.nsmallest(1,"GDP per capita")["Governorate"].values[0]
+    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    ov_col = "Overperformance_v2" if "Overperformance_v2" in govs.columns else "Overperformance Index"
+    if ov_col in govs.columns:
+        top_over  = govs.nlargest(1, ov_col)["Governorate"].values[0]
+        top_score = govs.nlargest(1,"Score")["Governorate"].values[0] if "Score" in govs.columns else "—"
+        gdp_low   = govs.nsmallest(1,"GDP per capita")["Governorate"].values[0] if "GDP per capita" in govs.columns else "—"
+        urb_high  = govs.nlargest(1,"Urban_Pct")["Governorate"].values[0] if "Urban_Pct" in govs.columns else "—"
         col_m1.metric("Top overperformer", top_over)
         col_m2.metric("Highest football score", top_score)
-        col_m3.metric("Lowest GDP per capita", gdp_low)
+        col_m3.metric("Most urban governorate", urb_high)
+        col_m4.metric("Lowest GDP per capita", gdp_low)
 
-    tab1, tab2, tab3 = st.tabs(["Overperformance ranking", "GDP vs Football score", "Map"])
+    if "Urban_Pct" in govs.columns:
+        st.info("Urban population (% of governorate population) is now incorporated into the economic weight alongside GDP per capita and total population.")
+
+    tab1, tab2, tab3 = st.tabs(["Overperformance ranking", "Urban population & football", "Map"])
 
     with tab1:
-        if "Overperformance Index" in govs.columns:
-            ov = govs[["Governorate","Overperformance Index","Score","Football Index",
-                        "GDP per capita","Population"]].dropna(subset=["Overperformance Index"])
-            ov = ov.sort_values("Overperformance Index", ascending=True)
-            fig_ov = px.bar(ov, y="Governorate", x="Overperformance Index",
-                            orientation="h",
-                            color="Overperformance Index",
+        if ov_col in govs.columns:
+            hover_g = {ov_col:":.3f","Score":True,"GDP per capita":True}
+            if "Urban_Pct" in govs.columns: hover_g["Urban_Pct"] = True
+            ov = govs[["Governorate",ov_col]].dropna(subset=[ov_col])
+            ov = ov.sort_values(ov_col, ascending=True)
+            fig_ov = px.bar(ov, y="Governorate", x=ov_col, orientation="h",
+                            color=ov_col,
                             color_continuous_scale=["#ef4444","#d1d5db","#16a34a"],
                             template="plotly_white", height=550)
             fig_ov.update_layout(margin=dict(t=10,b=10), xaxis_title="Overperformance Index",
                                   yaxis_title="", coloraxis_showscale=False)
             fig_ov.add_vline(x=0, line_color="#9ca3af", line_dash="dash")
             st.plotly_chart(apply_theme(fig_ov), use_container_width=True)
-            st.caption("Positive = overperforms relative to GDP & population. Negative = underperforms.")
+            lbl = "Incorporates urban population, GDP per capita and total population as economic weight." if "Urban_Pct" in govs.columns else "Positive = overperforms relative to GDP & population."
+            st.caption(lbl)
 
     with tab2:
-        if all(c in govs.columns for c in ["GDP per capita","Score","Population"]):
+        if "Urban_Pct" in govs.columns and "Score" in govs.columns:
+            col_u1, col_u2 = st.columns(2)
+            with col_u1:
+                fig_urb = px.bar(
+                    govs.sort_values("Urban_Pct", ascending=True),
+                    y="Governorate", x="Urban_Pct", orientation="h",
+                    color="Urban_Pct",
+                    color_continuous_scale=["#dbeafe","#1d4ed8"],
+                    template="plotly_white", height=480,
+                    labels={"Urban_Pct":"Urban population (%)"},
+                )
+                fig_urb.update_layout(margin=dict(t=10,b=10),
+                                      xaxis_title="Urban population (%)",
+                                      yaxis_title="", coloraxis_showscale=False)
+                st.plotly_chart(apply_theme(fig_urb), use_container_width=True)
+            with col_u2:
+                fig_us = px.scatter(
+                    govs.dropna(subset=["Urban_Pct","Score"]),
+                    x="Urban_Pct", y="Score",
+                    size="Population" if "Population" in govs.columns else None,
+                    color=ov_col if ov_col in govs.columns else None,
+                    hover_name="Governorate",
+                    color_continuous_scale=["#ef4444","#d1d5db","#16a34a"],
+                    size_max=50,
+                    labels={"Urban_Pct":"Urban population (%)","Score":"Football score"},
+                    template="plotly_white", height=480,
+                )
+                fig_us.update_layout(margin=dict(t=10,b=10), coloraxis_showscale=False)
+                st.plotly_chart(apply_theme(fig_us), use_container_width=True)
+            st.caption("Urban % vs football score. More urbanised governorates have higher economic weight — overperformers beat that baseline.")
+        elif all(c in govs.columns for c in ["GDP per capita","Score","Population"]):
             fig_scatter = px.scatter(
                 govs.dropna(subset=["GDP per capita","Score","Population"]),
                 x="GDP per capita", y="Score",
-                size="Population", color="Overperformance Index",
+                size="Population", color="Overperformance Index" if "Overperformance Index" in govs.columns else None,
                 hover_name="Governorate",
                 color_continuous_scale=["#ef4444","#d1d5db","#16a34a"],
                 size_max=50,
-                labels={"Score":"Football representation score","GDP per capita":"GDP per capita (PPP)"},
+                labels={"Score":"Football score","GDP per capita":"GDP per capita (PPP)"},
                 template="plotly_white", height=480,
             )
             fig_scatter.update_layout(margin=dict(t=10,b=10), coloraxis_showscale=True)
             st.plotly_chart(apply_theme(fig_scatter), use_container_width=True)
-            st.caption("Bubble size = population. Green = overperforms economically.")
 
     with tab3:
         GOV_COORDS = {
@@ -508,7 +712,7 @@ elif page == PAGES[2]:
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 4 — DISTRICT DENSITY
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == PAGES[3]:
+elif page == "District Density" or egypt_page == "District Density":
     st.markdown("## District Density — Greater Cairo")
     st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>Population density by district reveals where the largest untapped talent pools sit.</div>", unsafe_allow_html=True)
 
@@ -576,7 +780,7 @@ elif page == PAGES[3]:
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 5 — PLAYER ORIGINS
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == PAGES[4]:
+elif page == "Player Origins" or egypt_page == "Player Origins":
     st.markdown("## International Player Origins (1986–2026)")
     st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>Where Egypt's international players come from — and when they were born.</div>", unsafe_allow_html=True)
 
@@ -658,7 +862,7 @@ elif page == PAGES[4]:
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 6 — STARTER PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == PAGES[5]:
+elif page == "Starter Pipeline" or egypt_page == "Starter Pipeline":
     st.markdown("## National Team Starter Pipeline (1986–2026)")
     st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>Which governorates supplied starting berths to Egypt's national team across 40 years of international football.</div>", unsafe_allow_html=True)
 
@@ -735,3 +939,210 @@ elif page == PAGES[5]:
         csv_ssn = ssn_df.to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Download season-by-season data (CSV)", csv_ssn,
                            file_name="season_by_season.csv", mime="text/csv")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CAF OVERPERFORMANCE INDEX
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "CAF Overperformance Index":
+    st.markdown("## CAF Overperformance Index")
+    st.markdown("<div style='color:#6b7280; margin-bottom:20px; font-family:Georgia,serif;'>Football output minus economic potential across all 54 CAF nations. Positive = punching above weight.</div>", unsafe_allow_html=True)
+
+    if caf_df is None:
+        st.error("caf_index_v3.xlsx not found. Place it in the same folder as this script.")
+        st.stop()
+
+    top_over  = caf_df.loc[caf_df["Overperformance"].idxmax(), "COUNTRY"]
+    top_foot  = caf_df.loc[caf_df["Football Index"].idxmax(), "COUNTRY"]
+    top_under = caf_df.loc[caf_df["Overperformance"].idxmin(), "COUNTRY"]
+    n_over    = int((caf_df["Overperformance"] > 0.08).sum())
+
+    c1,c2,c3,c4 = st.columns(4)
+    for col,(val,label) in zip([c1,c2,c3,c4],[
+        (top_foot,  "Top football index"),
+        (top_over,  "Biggest overperformer"),
+        (top_under, "Biggest underperformer"),
+        (n_over,    "Nations punching above weight"),
+    ]):
+        with col:
+            st.markdown(f"""<div class='metric-card'>
+              <div class='metric-value' style='font-size:1.3rem;'>{val}</div>
+              <div class='metric-label'>{label}</div>
+            </div>""", unsafe_allow_html=True)
+
+    # Countries below 500k population - micro-states excluded from findings
+    MICRO_STATES = {"Seychelles","Mauritius","Cape Verde","Comoros","Djibouti",
+                    "Sao Tome","Eswatini","Equatorial Guinea"}
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    tab1, tab2, tab3 = st.tabs(["Overperformance ranking", "Football vs Economy", "By zone"])
+
+    with tab1:
+        df_ov = caf_df.sort_values("Overperformance", ascending=True).copy()
+
+        fig_ov = px.bar(df_ov, y="COUNTRY", x="Overperformance", orientation="h",
+                        color="Overperformance",
+                        color_continuous_scale=["#ef4444","#d1d5db","#16a34a"],
+                        hover_data={"Football Index":":.3f","Economic Index":":.3f","Classification":True},
+                        template="plotly_white", height=950)
+        fig_ov.update_layout(margin=dict(t=10,b=10),
+                             xaxis_title="Overperformance (Football Index - Economic Index)",
+                             yaxis_title="", coloraxis_showscale=False)
+        fig_ov.add_vline(x=0, line_dash="dash", line_color="#9ca3af")
+        st.plotly_chart(apply_theme(fig_ov), use_container_width=True)
+        st.caption("All 54 CAF nations shown. Green = overperforms. Red = underperforms.")
+
+        # Findings box filtered to 500k+
+        df_filtered = caf_df[~caf_df["COUNTRY"].isin(MICRO_STATES)].copy()
+        top_over_f  = df_filtered.loc[df_filtered["Overperformance"].idxmax(), "COUNTRY"]
+        top_under_f = df_filtered.loc[df_filtered["Overperformance"].idxmin(), "COUNTRY"]
+        top_over_v  = df_filtered["Overperformance"].max()
+        top_under_v = df_filtered["Overperformance"].min()
+        n_over_f    = int((df_filtered["Overperformance"] > 0.08).sum())
+
+        st.markdown(f"""
+        <div style='background:#f0f4ff;border:1px solid #c7d7f9;border-radius:8px;
+                    padding:16px 20px;margin-top:12px;font-family:Georgia,serif;color:#1e3a5f;'>
+          <div style='font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;
+                      color:#6b7280;margin-bottom:10px;'>
+            Key findings — nations with population 500,000+ ({len(df_filtered)} of 54)
+          </div>
+          <div style='display:flex;gap:32px;flex-wrap:wrap;'>
+            <div>
+              <div style='font-size:1.2rem;font-weight:700;color:#16a34a;'>{top_over_f}</div>
+              <div style='font-size:0.82rem;color:#6b7280;'>Biggest overperformer
+                <span style='color:#16a34a;font-weight:600;'>&nbsp;+{top_over_v:.3f}</span>
+              </div>
+            </div>
+            <div>
+              <div style='font-size:1.2rem;font-weight:700;color:#dc2626;'>{top_under_f}</div>
+              <div style='font-size:0.82rem;color:#6b7280;'>Biggest underperformer
+                <span style='color:#dc2626;font-weight:600;'>&nbsp;{top_under_v:.3f}</span>
+              </div>
+            </div>
+            <div>
+              <div style='font-size:1.2rem;font-weight:700;color:#1d4ed8;'>{n_over_f}</div>
+              <div style='font-size:0.82rem;color:#6b7280;'>Nations punching above weight</div>
+            </div>
+          </div>
+          <div style='font-size:0.75rem;color:#9ca3af;margin-top:10px;'>
+            Micro-states excluded from findings: {", ".join(sorted(MICRO_STATES))}
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with tab2:
+        hover_cols = {"Overperformance":":.3f","Classification":True}
+        if "Zone" in caf_df.columns: hover_cols["Zone"] = True
+        fig_sc = px.scatter(caf_df.dropna(subset=["Economic Index","Football Index"]),
+                            x="Economic Index", y="Football Index",
+                            text="COUNTRY", color="Overperformance",
+                            color_continuous_scale=["#ef4444","#d1d5db","#16a34a"],
+                            size_max=20,
+                            hover_data=hover_cols,
+                            template="plotly_white", height=620)
+        fig_sc.update_traces(textposition="top center", textfont_size=9,
+                             marker=dict(size=10))
+        fig_sc.add_shape(type="line", x0=0, y0=0, x1=1, y1=1,
+                         line=dict(dash="dash", color="#9ca3af"))
+        fig_sc.update_layout(margin=dict(t=10,b=10),
+                             xaxis_title="Economic Index", yaxis_title="Football Index")
+        st.plotly_chart(apply_theme(fig_sc), use_container_width=True)
+        st.caption("Above the diagonal = overperforms. Below = underperforms.")
+
+    with tab3:
+        if "Zone" in caf_df.columns:
+            zone_avg = caf_df.groupby("Zone").agg(
+                Countries=("COUNTRY","count"),
+                Avg_Football=("Football Index","mean"),
+                Avg_Economic=("Economic Index","mean"),
+                Avg_Overperformance=("Overperformance","mean"),
+            ).round(3).reset_index().sort_values("Avg_Overperformance", ascending=False)
+            fig_zone = px.bar(zone_avg, x="Zone", y=["Avg_Football","Avg_Economic"],
+                              barmode="group",
+                              color_discrete_map={"Avg_Football":"#1d4ed8","Avg_Economic":"#93c5fd"},
+                              template="plotly_white", height=380,
+                              labels={"value":"Average Index","variable":"Metric"})
+            fig_zone.update_layout(margin=dict(t=10,b=10), xaxis_title="", yaxis_title="")
+            st.plotly_chart(apply_theme(fig_zone), use_container_width=True)
+
+            col_z1, col_z2 = st.columns([1,1])
+            with col_z1:
+                st.markdown("**Zone averages**")
+                st.dataframe(zone_avg.reset_index(drop=True), use_container_width=True)
+            with col_z2:
+                st.markdown("""
+                <div style='background:#f0f4ff;border:1px solid #c7d7f9;border-radius:8px;
+                            padding:16px 18px;font-family:Georgia,serif;font-size:0.88rem;color:#1e3a5f;'>
+                <b>Football Index (8 metrics, 12.5% each)</b><br>
+                FIFA Men ranking · FIFA Women ranking · Association points<br>
+                Infrastructure score · Youth tournaments<br>
+                Player export volume · Player export quality · Tournament pedigree
+                <br><br>
+                <b>Economic Index (4 metrics, 25% each)</b><br>
+                Population · GDP · GDP per capita · HDI
+                <br><br>
+                <b>Overperformance</b> = Football − Economic<br>
+                All scores min-max normalised 0–1.
+                </div>
+                """, unsafe_allow_html=True)
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    csv_caf = caf_df.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Download CAF index data (CSV)", csv_caf,
+                       file_name="caf_overperformance_index.csv", mime="text/csv")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CAF TOURNAMENT PEDIGREE
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "CAF Tournament Pedigree":
+    st.markdown("## CAF Tournament Pedigree")
+    st.markdown("<div style='color:#6b7280; margin-bottom:20px; font-family:Georgia,serif;'>AFCON performance 2017–2025 and World Cup qualification 2018 & 2022 across all 54 CAF nations.</div>", unsafe_allow_html=True)
+
+    if ped_df is None:
+        st.warning("Tournament pedigree data not available.")
+        st.stop()
+
+    # Pedigree bar chart
+    ped_plot = ped_df[["Country","Pedigree Score","AFCON Score","WC Score"]].copy()
+    for c in ["Pedigree Score","AFCON Score","WC Score"]:
+        ped_plot[c] = pd.to_numeric(ped_plot[c], errors="coerce")
+    ped_plot = ped_plot.dropna(subset=["Pedigree Score"])
+    ped_plot = ped_plot.sort_values("Pedigree Score", ascending=True)
+    fig_ped = px.bar(ped_plot, y="Country", x="Pedigree Score", orientation="h",
+                     color="Pedigree Score",
+                     color_continuous_scale=["#dbeafe","#1d4ed8"],
+                     hover_data={"AFCON Score":":.3f","WC Score":":.3f"},
+                     template="plotly_white", height=950)
+    fig_ped.update_layout(margin=dict(t=10,b=10), xaxis_title="Pedigree Score (0–1)",
+                          yaxis_title="", coloraxis_showscale=False)
+    st.plotly_chart(apply_theme(fig_ped), use_container_width=True)
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    # Tournament results grid
+    result_cols = [c for c in ped_df.columns if "AFCON" in str(c) or "WC" in str(c)]
+    if result_cols:
+        st.markdown("### Results breakdown")
+        display_ped = ped_df[["Country","Pedigree Score","AFCON Score","WC Score"] + result_cols]
+        display_ped = display_ped.sort_values("Pedigree Score", ascending=False).reset_index(drop=True)
+
+        def colour_result(val):
+            colors = {"Winner":"background-color:#ffd700;color:#000",
+                      "Runner-up":"background-color:#c0c0c0;color:#000",
+                      "3rd":"background-color:#cd7f32;color:#fff",
+                      "4th":"background-color:#fef3c7;color:#000",
+                      "QF":"background-color:#dbeafe;color:#000",
+                      "R16+":"background-color:#dbeafe;color:#000",
+                      "Group":"background-color:#f1f5f9;color:#000",
+                      "DNQ":"background-color:#fee2e2;color:#000"}
+            return colors.get(str(val).strip(), "")
+
+        # Deduplicate columns before styling
+        display_ped = display_ped.loc[:,~display_ped.columns.duplicated()]
+        display_ped = display_ped.reset_index(drop=True)
+        result_cols = [c for c in result_cols if c in display_ped.columns]
+        st.dataframe(
+            display_ped.style.map(colour_result, subset=result_cols),
+            use_container_width=True, height=500
+        )
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.caption("AFCON 2025: Morocco officially declared champion after CAF stripped Senegal (March 2026). Scoring: Winner=1.0 · Runner-up=0.75 · 3rd=0.55 · 4th=0.40 · QF=0.20 · Group=0.05 · DNQ=0. WC weighted 60%, AFCON 40%.")
