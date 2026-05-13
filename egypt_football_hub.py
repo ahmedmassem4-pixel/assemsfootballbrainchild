@@ -176,7 +176,7 @@ def load_pyramid():
     for c in numeric_cols:
         if c in govs.columns:
             govs[c] = pd.to_numeric(govs[c], errors="coerce")
-    # Merge urban population data
+    # Merge urban population data (for scatterplot tab only — not used in overperformance metric)
     try:
         upop = pd.read_csv("egypt_populations_final.csv")
         upop = upop[upop["Governorate"] != "Total"].copy()
@@ -185,18 +185,9 @@ def load_pyramid():
                     "Beheira":"Beheira","Assyut":"Assiut","Sharqia":"Sharkia"}
         upop["Governorate"] = upop["Governorate"].replace(name_fix)
         upop["Urban_Pct"] = (upop["Urban_Total"] / upop["Total_Population"] * 100).round(1)
-        govs = govs.merge(upop[["Governorate","Urban_Total","Rural_Total","Urban_Pct"]], on="Governorate", how="left")
-        # Recompute overperformance index incorporating urban population
-        def minmax_s(s):
-            mn,mx = s.min(), s.max()
-            return (s-mn)/(mx-mn) if mx!=mn else pd.Series([0.5]*len(s), index=s.index)
-        if "GDP per capita" in govs.columns and "Score" in govs.columns:
-            govs["Urban_Score"] = minmax_s(govs["Urban_Pct"].fillna(govs["Urban_Pct"].median()))
-            govs["GDP_Score"]   = minmax_s(govs["GDP per capita"].fillna(0))
-            govs["Pop_Score"]   = minmax_s(govs["Population"].fillna(0))
-            govs["Economic_Weight"] = (govs["Urban_Score"]*0.40 + govs["GDP_Score"]*0.40 + govs["Pop_Score"]*0.20)
-            govs["Football_Weight"] = minmax_s(govs["Score"].fillna(0))
-            govs["Overperformance_v2"] = (govs["Football_Weight"] - govs["Economic_Weight"]).round(4)
+        upop["Rural_Pct"] = (upop["Rural_Total"] / upop["Total_Population"] * 100).round(1)
+        govs["Governorate"] = govs["Governorate"].str.strip()
+        govs = govs.merge(upop[["Governorate","Urban_Total","Rural_Total","Urban_Pct","Rural_Pct"]], on="Governorate", how="left")
     except Exception:
         pass
 
@@ -588,22 +579,17 @@ elif page == "Governorate Intelligence" or egypt_page == "Governorate Intelligen
     st.markdown("## Governorate Intelligence")
     st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>Football representation vs. economic and demographic weight — including urban population as an economic metric.</div>", unsafe_allow_html=True)
 
-    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-    ov_col = "Overperformance_v2" if "Overperformance_v2" in govs.columns else "Overperformance Index"
+    col_m1, col_m2, col_m3 = st.columns(3)
+    ov_col = "Overperformance Index"
     if ov_col in govs.columns:
         top_over  = govs.nlargest(1, ov_col)["Governorate"].values[0]
         top_score = govs.nlargest(1,"Score")["Governorate"].values[0] if "Score" in govs.columns else "—"
         gdp_low   = govs.nsmallest(1,"GDP per capita")["Governorate"].values[0] if "GDP per capita" in govs.columns else "—"
-        urb_high  = govs.nlargest(1,"Urban_Pct")["Governorate"].values[0] if "Urban_Pct" in govs.columns else "—"
         col_m1.metric("Top overperformer", top_over)
         col_m2.metric("Highest football score", top_score)
-        col_m3.metric("Most urban governorate", urb_high)
-        col_m4.metric("Lowest GDP per capita", gdp_low)
+        col_m3.metric("Lowest GDP per capita", gdp_low)
 
-    if "Urban_Pct" in govs.columns:
-        st.info("Urban population (% of governorate population) is now incorporated into the economic weight alongside GDP per capita and total population.")
-
-    tab1, tab2, tab3 = st.tabs(["Overperformance ranking", "Urban population & football", "Map"])
+    tab1, tab2, tab3 = st.tabs(["Overperformance ranking", "Urban vs Rural & football", "Map"])
 
     with tab1:
         if ov_col in govs.columns:
@@ -624,48 +610,44 @@ elif page == "Governorate Intelligence" or egypt_page == "Governorate Intelligen
 
     with tab2:
         if "Urban_Pct" in govs.columns and "Score" in govs.columns:
+            sc_df = govs.dropna(subset=["Urban_Pct","Score","Rural_Pct"]).copy()
             col_u1, col_u2 = st.columns(2)
             with col_u1:
-                fig_urb = px.bar(
-                    govs.sort_values("Urban_Pct", ascending=True),
-                    y="Governorate", x="Urban_Pct", orientation="h",
-                    color="Urban_Pct",
-                    color_continuous_scale=["#dbeafe","#1d4ed8"],
-                    template="plotly_white", height=480,
-                    labels={"Urban_Pct":"Urban population (%)"},
-                )
-                fig_urb.update_layout(margin=dict(t=10,b=10),
-                                      xaxis_title="Urban population (%)",
-                                      yaxis_title="", coloraxis_showscale=False)
-                st.plotly_chart(apply_theme(fig_urb), use_container_width=True)
-            with col_u2:
-                fig_us = px.scatter(
-                    govs.dropna(subset=["Urban_Pct","Score"]),
-                    x="Urban_Pct", y="Score",
-                    size="Population" if "Population" in govs.columns else None,
-                    color=ov_col if ov_col in govs.columns else None,
+                st.markdown("#### Football score vs Urban population %")
+                fig_urb = px.scatter(
+                    sc_df, x="Urban_Pct", y="Score",
+                    text="Governorate",
+                    size="Population" if "Population" in sc_df.columns else None,
+                    color=ov_col if ov_col in sc_df.columns else None,
                     hover_name="Governorate",
+                    hover_data={"Urban_Pct":":.1f","Rural_Pct":":.1f","Score":True},
                     color_continuous_scale=["#ef4444","#d1d5db","#16a34a"],
-                    size_max=50,
-                    labels={"Urban_Pct":"Urban population (%)","Score":"Football score"},
-                    template="plotly_white", height=480,
+                    size_max=45,
+                    labels={"Urban_Pct":"Urban population (%)","Score":"Football representation score"},
+                    template="plotly_white", height=460,
                 )
-                fig_us.update_layout(margin=dict(t=10,b=10), coloraxis_showscale=False)
-                st.plotly_chart(apply_theme(fig_us), use_container_width=True)
-            st.caption("Urban % vs football score. More urbanised governorates have higher economic weight — overperformers beat that baseline.")
-        elif all(c in govs.columns for c in ["GDP per capita","Score","Population"]):
-            fig_scatter = px.scatter(
-                govs.dropna(subset=["GDP per capita","Score","Population"]),
-                x="GDP per capita", y="Score",
-                size="Population", color="Overperformance Index" if "Overperformance Index" in govs.columns else None,
-                hover_name="Governorate",
-                color_continuous_scale=["#ef4444","#d1d5db","#16a34a"],
-                size_max=50,
-                labels={"Score":"Football score","GDP per capita":"GDP per capita (PPP)"},
-                template="plotly_white", height=480,
-            )
-            fig_scatter.update_layout(margin=dict(t=10,b=10), coloraxis_showscale=True)
-            st.plotly_chart(apply_theme(fig_scatter), use_container_width=True)
+                fig_urb.update_traces(textposition="top center", textfont_size=8)
+                fig_urb.update_layout(margin=dict(t=10,b=10), coloraxis_showscale=False)
+                st.plotly_chart(apply_theme(fig_urb), use_container_width=True)
+                st.caption("Bubble size = total population. Colour = overperformance. Ismailia and Dakahlia sitting high despite low urban % are the key outliers.")
+            with col_u2:
+                st.markdown("#### Football score vs Rural population %")
+                fig_rur = px.scatter(
+                    sc_df, x="Rural_Pct", y="Score",
+                    text="Governorate",
+                    size="Population" if "Population" in sc_df.columns else None,
+                    color=ov_col if ov_col in sc_df.columns else None,
+                    hover_name="Governorate",
+                    hover_data={"Rural_Pct":":.1f","Urban_Pct":":.1f","Score":True},
+                    color_continuous_scale=["#ef4444","#d1d5db","#16a34a"],
+                    size_max=45,
+                    labels={"Rural_Pct":"Rural population (%)","Score":"Football representation score"},
+                    template="plotly_white", height=460,
+                )
+                fig_rur.update_traces(textposition="top center", textfont_size=8)
+                fig_rur.update_layout(margin=dict(t=10,b=10), coloraxis_showscale=False)
+                st.plotly_chart(apply_theme(fig_rur), use_container_width=True)
+                st.caption("High rural % with high football score = genuine grassroots talent corridors independent of urban infrastructure.")
 
     with tab3:
         GOV_COORDS = {
