@@ -933,21 +933,34 @@ elif page == "CAF Overperformance Index":
         st.error("caf_index_v3.xlsx not found. Place it in the same folder as this script.")
         st.stop()
 
-    top_over  = caf_df.loc[caf_df["Overperformance"].idxmax(), "COUNTRY"]
+    MICRO_STATES_HEADER = {"Seychelles","Mauritius","Cape Verde","Comoros","Djibouti",
+                           "Sao Tome","Eswatini","Equatorial Guinea"}
+    caf_filtered = caf_df[~caf_df["COUNTRY"].isin(MICRO_STATES_HEADER)]
+    top_over  = caf_filtered.loc[caf_filtered["Overperformance"].idxmax(), "COUNTRY"]
     top_foot  = caf_df.loc[caf_df["Football Index"].idxmax(), "COUNTRY"]
-    top_under = caf_df.loc[caf_df["Overperformance"].idxmin(), "COUNTRY"]
-    n_over    = int((caf_df["Overperformance"] > 0.08).sum())
+    top_under = caf_filtered.loc[caf_filtered["Overperformance"].idxmin(), "COUNTRY"]
+    n_over    = int((caf_filtered["Overperformance"] > 0.08).sum())
 
-    c1,c2,c3,c4 = st.columns(4)
-    for col,(val,label) in zip([c1,c2,c3,c4],[
-        (top_foot,  "Top football index"),
-        (top_over,  "Biggest overperformer"),
-        (top_under, "Biggest underperformer"),
-        (n_over,    "Nations punching above weight"),
+    # Most underachieving zone (filtered)
+    if "Zone" in caf_df.columns:
+        zone_ov = caf_filtered.groupby("Zone")["Overperformance"].mean()
+        worst_zone = zone_ov.idxmin()
+        worst_zone_val = zone_ov.min()
+    else:
+        worst_zone = "—"
+        worst_zone_val = 0
+
+    c1,c2,c3,c4,c5 = st.columns(5)
+    for col,(val,label) in zip([c1,c2,c3,c4,c5],[
+        (top_foot,   "Top football index"),
+        (top_over,   "Biggest overperformer"),
+        (top_under,  "Biggest underperformer"),
+        (n_over,     "Nations punching above weight"),
+        (f"{worst_zone} ({worst_zone_val:.3f})", "Most underachieving zone"),
     ]):
         with col:
             st.markdown(f"""<div class='metric-card'>
-              <div class='metric-value' style='font-size:1.3rem;'>{val}</div>
+              <div class='metric-value' style='font-size:1.1rem;white-space:pre-line;'>{val}</div>
               <div class='metric-label'>{label}</div>
             </div>""", unsafe_allow_html=True)
 
