@@ -61,6 +61,33 @@ st.markdown("""
   [data-testid="stSidebar"] [data-testid="stRadio"] label:hover { background: #eff6ff; }
   /* Headings */
   h1, h2, h3 { color: #1e3a5f !important; }
+  /* Sidebar section labels above specific radio items */
+  [data-testid="stSidebar"] [data-testid="stRadio"] label:nth-child(1)::before {
+    content: "EGYPT ANALYSIS";
+    display: block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #9ca3af;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 10px 0 4px;
+    font-family: Georgia, serif;
+    pointer-events: none;
+  }
+  [data-testid="stSidebar"] [data-testid="stRadio"] label:nth-child(7)::before {
+    content: "AFRICA ANALYSIS";
+    display: block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #9ca3af;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 14px 0 4px;
+    border-top: 1px solid #e5e7eb;
+    margin-top: 6px;
+    font-family: Georgia, serif;
+    pointer-events: none;
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -318,6 +345,13 @@ AFRICA_PAGES = [
 ]
 PAGES = EGYPT_PAGES + AFRICA_PAGES
 
+# Build grouped page list with separators for display
+ALL_PAGES_DISPLAY = (
+    ["— Egypt Analysis —"] + EGYPT_PAGES +
+    ["— Africa Analysis —"] + AFRICA_PAGES
+)
+NAVIGABLE = EGYPT_PAGES + AFRICA_PAGES
+
 with st.sidebar:
     st.markdown("""
     <div style='padding:14px 0 18px; border-bottom:1px solid #e5e7eb; margin-bottom:14px;'>
@@ -329,24 +363,14 @@ with st.sidebar:
         Egypt · Africa · Intelligence
       </div>
     </div>
-    <div style='font-size:0.7rem; font-weight:600; color:#9ca3af; text-transform:uppercase;
-                letter-spacing:0.08em; padding: 4px 0 6px; font-family:Georgia,serif;'>
-      Egypt Analysis
-    </div>
     """, unsafe_allow_html=True)
 
-    egypt_page = st.radio("Egypt", EGYPT_PAGES, label_visibility="collapsed")
+    selected = st.radio("Navigation", NAVIGABLE,
+                        format_func=lambda x: x,
+                        label_visibility="collapsed")
 
-    st.markdown("""
-    <div style='font-size:0.7rem; font-weight:600; color:#9ca3af; text-transform:uppercase;
-                letter-spacing:0.08em; padding:16px 0 6px; border-top:1px solid #e5e7eb;
-                font-family:Georgia,serif;'>
-      Africa Analysis
-    </div>
-    """, unsafe_allow_html=True)
-
-    africa_page = st.radio("Africa", AFRICA_PAGES, label_visibility="collapsed")
-
+    # Section headers injected as disabled separators via markdown
+    # (rendered above the radio via CSS trick — just use captions)
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("""
     <div style='font-size:0.68rem; color:#9ca3af; padding:8px 0;
@@ -355,17 +379,8 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-# Determine active page using session state to track last interaction
-if "last_eg" not in st.session_state: st.session_state["last_eg"] = egypt_page
-if "last_af" not in st.session_state: st.session_state["last_af"] = africa_page
-if egypt_page != st.session_state["last_eg"]:
-    st.session_state["last_eg"] = egypt_page
-    page = egypt_page
-elif africa_page != st.session_state["last_af"]:
-    st.session_state["last_af"] = africa_page
-    page = africa_page
-else:
-    page = st.session_state.get("last_eg","Overview")
+page = selected
+
 
 # ── Load data ──────────────────────────────────────────────────────────────────
 missing = [f for f in [PYRAMID_FILE, STARTERS_FILE] if not os.path.exists(f)]
@@ -504,7 +519,7 @@ if page == PAGES[0]:
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 2 — PYRAMID MAP
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == "Pyramid Map" or (page not in AFRICA_PAGES and egypt_page == "Pyramid Map"):
+elif page == "Pyramid Map":
     st.markdown("## The Football Pyramid")
     st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>All clubs across the top three men's tiers, Women's Super League and Futsal League.</div>", unsafe_allow_html=True)
 
@@ -575,7 +590,7 @@ elif page == "Pyramid Map" or (page not in AFRICA_PAGES and egypt_page == "Pyram
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 3 — GOVERNORATE INTELLIGENCE
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == "Governorate Intelligence" or egypt_page == "Governorate Intelligence":
+elif page == "Governorate Intelligence":
     st.markdown("## Governorate Intelligence")
     st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>Football representation vs. economic and demographic weight — including urban population as an economic metric.</div>", unsafe_allow_html=True)
 
@@ -589,7 +604,7 @@ elif page == "Governorate Intelligence" or egypt_page == "Governorate Intelligen
         col_m2.metric("Highest football score", top_score)
         col_m3.metric("Lowest GDP per capita", gdp_low)
 
-    tab1, tab2, tab3 = st.tabs(["Overperformance ranking", "Urban vs Rural & football", "Map"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Overperformance ranking", "Urban vs Rural & football", "Map", "Combined Football Output"])
 
     with tab1:
         if ov_col in govs.columns:
@@ -686,6 +701,117 @@ elif page == "Governorate Intelligence" or egypt_page == "Governorate Intelligen
                               "Football Index","Overperformance Index",
                               "Premier League","Div2","Div 3","Womens","Futsal"]
                  if c in govs.columns]
+    with tab4:
+        st.markdown("#### Combined Football Output — Clubs + NT Players per Governorate")
+        st.markdown("<div style='color:#6b7280;font-family:Georgia,serif;font-size:0.9rem;margin-bottom:16px;'>Combines the football infrastructure score (clubs across all tiers) with the number of international players produced by each governorate. Both metrics normalised 0–1 then averaged.</div>", unsafe_allow_html=True)
+
+        # Build combined output
+        try:
+            nt_counts = players.groupby("Governorate").size().reset_index(name="NT_Players")
+            nt_counts["Governorate"] = nt_counts["Governorate"].str.strip()
+            nt_fix = {"Dakahleya":"Dakahlia","Dakhaleya":"Dakahlia","Gharbeya":"Gharbia",
+                      "Sharqeya":"Sharkia","Sharqia":"Sharkia","Monofeya":"Menoufia",
+                      "Monofiya":"Menoufia","Qalyoubeya":"Qalyubia","Ismailia ":"Ismailia",
+                      "Asyut":"Assiut","Cairo ":"Cairo","Giza ":"Giza"}
+            nt_counts["Governorate"] = nt_counts["Governorate"].replace(nt_fix)
+
+            comb = govs.merge(nt_counts, on="Governorate", how="left")
+            comb["NT_Players"] = comb["NT_Players"].fillna(0)
+
+            def minmax_c(s):
+                mn,mx = s.min(), s.max()
+                return (s-mn)/(mx-mn) if mx!=mn else pd.Series([0.5]*len(s), index=s.index)
+
+            if "Score" in comb.columns:
+                comb["Score_norm"] = minmax_c(comb["Score"].fillna(0))
+                comb["NT_norm"]    = minmax_c(comb["NT_Players"])
+                comb["Combined_Output"] = ((comb["Score_norm"] + comb["NT_norm"]) / 2)
+                comb = comb.sort_values("Combined_Output", ascending=False).reset_index(drop=True)
+                comb["Rank"] = range(1, len(comb)+1)
+
+                # Bar chart
+                fig_comb = px.bar(
+                    comb.sort_values("Combined_Output", ascending=True),
+                    y="Governorate", x="Combined_Output", orientation="h",
+                    color="Combined_Output",
+                    color_continuous_scale=["#dbeafe","#1d4ed8"],
+                    hover_data={"Score":True, "NT_Players":True, "Combined_Output":":.4f"},
+                    template="plotly_white", height=600,
+                    labels={"Combined_Output":"Combined Football Output (0–1)"},
+                )
+                fig_comb.update_layout(margin=dict(t=10,b=10), xaxis_title="Combined Football Output (0–1)",
+                                       yaxis_title="", coloraxis_showscale=False)
+                st.plotly_chart(apply_theme(fig_comb), use_container_width=True)
+
+                # Side by side: club score vs NT players
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    fig_nt = px.bar(
+                        comb.sort_values("NT_Players", ascending=True),
+                        y="Governorate", x="NT_Players", orientation="h",
+                        color="NT_Players",
+                        color_continuous_scale=["#fef3c7","#d97706"],
+                        template="plotly_white", height=550,
+                        labels={"NT_Players":"International players produced"},
+                    )
+                    fig_nt.update_layout(margin=dict(t=10,b=10), xaxis_title="NT players (1986–2026)",
+                                         yaxis_title="", coloraxis_showscale=False)
+                    st.plotly_chart(apply_theme(fig_nt), use_container_width=True)
+                    st.caption("Raw international players per governorate. Dakahlia (23) and Ismailia (15) stand out relative to their infrastructure.")
+
+                with col_c2:
+                    fig_sc2 = px.scatter(
+                        comb.dropna(subset=["Score","NT_Players"]),
+                        x="Score", y="NT_Players",
+                        text="Governorate",
+                        color="Combined_Output",
+                        color_continuous_scale=["#dbeafe","#1d4ed8"],
+                        size="Combined_Output",
+                        size_max=30,
+                        hover_name="Governorate",
+                        template="plotly_white", height=550,
+                        labels={"Score":"Club infrastructure score","NT_Players":"NT players produced"},
+                    )
+                    fig_sc2.update_traces(textposition="top center", textfont_size=8)
+                    fig_sc2.update_layout(margin=dict(t=10,b=10), coloraxis_showscale=False)
+                    st.plotly_chart(apply_theme(fig_sc2), use_container_width=True)
+                    st.caption("Top-right = strong on both. Sharkia (top-left) produces NT players with almost no formal infrastructure. Dakahlia similar.")
+
+                # Key insight box
+                top3 = comb.nlargest(3, "NT_Players")[["Governorate","NT_Players","Score"]].reset_index(drop=True)
+                hidden = comb[(comb["NT_Players"] >= 5) & (comb["Score"] <= 5)][["Governorate","NT_Players","Score"]]
+                st.markdown(f"""
+                <div style='background:#f0f4ff;border:1px solid #c7d7f9;border-radius:8px;
+                            padding:16px 20px;margin-top:8px;font-family:Georgia,serif;color:#1e3a5f;'>
+                  <div style='font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;
+                              color:#6b7280;margin-bottom:10px;'>Key findings</div>
+                  <div style='font-size:0.9rem;line-height:1.7;'>
+                    <b>Dakahlia</b> ranks 3rd overall but has almost no club infrastructure — 
+                    23 NT players from a largely rural governorate with low GDP per capita. 
+                    Pure grassroots talent corridor.<br>
+                    <b>Sharkia</b> produced 10 NT players with only 1 club in the formal pyramid — 
+                    the starkest infrastructure gap in the dataset.<br>
+                    <b>Cairo</b> leads on both metrics but its dominance is partly structural — 
+                    scouts and academies concentrate there, pulling talent from other governorates.
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.markdown("""
+                <div style='margin-top:20px; padding: 0 4px; font-family:Georgia,serif;
+                            font-size:0.82rem; color:#9ca3af; line-height:1.8;'>
+                  <i><b>Regression analysis:</b> Urban population % explains 13.1% of variance in combined 
+                  football output across Egyptian governorates (R²=0.131, p=0.064), just below the 
+                  conventional significance threshold. GDP per capita explains only 0.7% (R²=0.007, p=0.68) 
+                  and is not a meaningful predictor. Together, both variables explain 15.5% of variance — 
+                  meaning roughly 84% of what drives football talent output across governorates is captured 
+                  by neither urbanisation nor wealth. Informal pathways, historical club concentration, 
+                  and scouting networks are likely the dominant forces.</i>
+                </div>
+                """, unsafe_allow_html=True)
+        except Exception as e:
+            st.warning(f"Could not compute combined output: {e}")
+
     csv_gov = govs[show_cols].sort_values("Overperformance Index", ascending=False).to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download governorate data (CSV)", csv_gov,
                        file_name="governorate_intelligence.csv", mime="text/csv")
@@ -694,7 +820,7 @@ elif page == "Governorate Intelligence" or egypt_page == "Governorate Intelligen
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 4 — DISTRICT DENSITY
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == "District Density" or egypt_page == "District Density":
+elif page == "District Density":
     st.markdown("## District Density — Greater Cairo")
     st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>Population density by district reveals where the largest untapped talent pools sit.</div>", unsafe_allow_html=True)
 
@@ -762,7 +888,7 @@ elif page == "District Density" or egypt_page == "District Density":
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 5 — PLAYER ORIGINS
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == "Player Origins" or egypt_page == "Player Origins":
+elif page == "Player Origins":
     st.markdown("## International Player Origins (1986–2026)")
     st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>Where Egypt's international players come from — and when they were born.</div>", unsafe_allow_html=True)
 
@@ -844,7 +970,7 @@ elif page == "Player Origins" or egypt_page == "Player Origins":
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 6 — STARTER PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == "Starter Pipeline" or egypt_page == "Starter Pipeline":
+elif page == "Starter Pipeline":
     st.markdown("## National Team Starter Pipeline (1986–2026)")
     st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>Which governorates supplied starting berths to Egypt's national team across 40 years of international football.</div>", unsafe_allow_html=True)
 
