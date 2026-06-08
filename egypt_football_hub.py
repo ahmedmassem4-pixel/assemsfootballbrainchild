@@ -93,7 +93,8 @@ st.markdown("""
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 PYRAMID_FILE   = "Egyptian_Football_Pyramid.xlsx"
-STARTERS_FILE  = "Starters_team_breakdown.xlsx"
+STARTERS_FILE       = "Starters_team_breakdown.xlsx"
+STARTERS_FINAL_FILE = "starters_final_v11.xlsx"
 CAF_FILE         = "caf_index_v3.xlsx"
 URBAN_POP_FILE   = "egypt_populations_final.csv"
 
@@ -246,6 +247,24 @@ def load_pyramid():
     return clubs, govs, districts, players
 
 @st.cache_data
+def load_starters_final():
+    if not os.path.exists(STARTERS_FINAL_FILE):
+        return None
+    xl = pd.ExcelFile(STARTERS_FINAL_FILE)
+    df = xl.parse("All Starters", header=1)
+    df.columns = ["Tournament","Year","Player","Total_Mins","Club","Governorate"]
+    df = df[df["Player"].notna() & (df["Player"].astype(str).str.strip() != "")].copy()
+    df["Year"] = pd.to_numeric(df["Year"], errors="coerce")
+    df["Total_Mins"] = pd.to_numeric(df["Total_Mins"], errors="coerce")
+    df["Governorate"] = df["Governorate"].fillna("").astype(str).str.strip()
+    df["Club"] = df["Club"].fillna("").astype(str).str.strip()
+    gov_fix = {"Dakahleya":"Dakahlia","Dakhaleya":"Dakahlia","Dakahelya":"Dakahlia",
+               "Gharbeya":"Gharbia","Sharqeya":"Sharkia","Monofeya":"Menoufia",
+               "Qalyoubeya":"Qalyubia","Asyut":"Assiut"}
+    df["Governorate"] = df["Governorate"].replace(gov_fix)
+    return df
+
+@st.cache_data
 def load_caf():
     if not os.path.exists(CAF_FILE):
         return None
@@ -391,6 +410,7 @@ if missing:
 clubs, govs, districts, players = load_pyramid()
 ssn_df, gov_cols = load_starters()
 caf_result = load_caf()
+starters_df = load_starters_final()
 caf_df, ped_df = caf_result if caf_result else (None, None)
 urban_df = load_urban()
 
@@ -620,8 +640,19 @@ elif page == "Governorate Intelligence":
                                   yaxis_title="", coloraxis_showscale=False)
             fig_ov.add_vline(x=0, line_color="#9ca3af", line_dash="dash")
             st.plotly_chart(apply_theme(fig_ov), use_container_width=True)
-            lbl = "Incorporates urban population, GDP per capita and total population as economic weight." if "Urban_Pct" in govs.columns else "Positive = overperforms relative to GDP & population."
-            st.caption(lbl)
+            st.caption("Positive = overperforms relative to GDP per capita and population.")
+            # Only exclude Score 0 or 1 — truly no ecosystem
+            excluded = ["New Valley","North Sinai","South Sinai"]
+            excluded_str = ", ".join(sorted(excluded)) if excluded else ""
+            if excluded_str:
+                st.markdown(f"""
+                <div style='font-size:0.8rem;color:#9ca3af;font-family:Georgia,serif;
+                            font-style:italic;margin-top:6px;padding:0 4px;'>
+                  Note: {excluded_str} {'has' if len(excluded)==1 else 'have'} an infrastructure
+                  score of 0–1 and {'is' if len(excluded)==1 else 'are'} excluded from overperformance
+                  findings — no meaningful formal club ecosystem to measure against.
+                </div>
+                """, unsafe_allow_html=True)
 
     with tab2:
         if "Urban_Pct" in govs.columns and "Score" in govs.columns:
@@ -780,18 +811,22 @@ elif page == "Governorate Intelligence":
                 # Key insight box
                 top3 = comb.nlargest(3, "NT_Players")[["Governorate","NT_Players","Score"]].reset_index(drop=True)
                 hidden = comb[(comb["NT_Players"] >= 5) & (comb["Score"] <= 5)][["Governorate","NT_Players","Score"]]
+                # Get Ismailia population from govs
+                ism_pop = govs[govs["Governorate"].str.strip()=="Ismailia"]["Population"].values
+                ism_pop_str = f"{int(ism_pop[0]):,}" if len(ism_pop)>0 and pd.notna(ism_pop[0]) else "1,514,708"
                 st.markdown(f"""
                 <div style='background:#f0f4ff;border:1px solid #c7d7f9;border-radius:8px;
                             padding:16px 20px;margin-top:8px;font-family:Georgia,serif;color:#1e3a5f;'>
                   <div style='font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;
                               color:#6b7280;margin-bottom:10px;'>Key findings</div>
                   <div style='font-size:0.9rem;line-height:1.7;'>
-                    <b>Dakahlia</b> ranks 3rd overall but has almost no club infrastructure — 
-                    23 NT players from a largely rural governorate with low GDP per capita. 
-                    Pure grassroots talent corridor.<br>
-                    <b>Sharkia</b> produced 10 NT players with only 1 club in the formal pyramid — 
-                    the starkest infrastructure gap in the dataset.<br>
-                    <b>Cairo</b> leads on both metrics but its dominance is partly structural — 
+                    <b>Ismailia</b>, despite a population of only {ism_pop_str} — one of Egypt's
+                    smallest governorates — has a consistently high combined football output score,
+                    producing a disproportionate number of international players relative to its size.<br><br>
+                    <b>Dakahlia</b> is widely regarded as Egypt's biggest talent hub, yet in 2026
+                    its infrastructure score is among the lowest in the dataset. The talent pipeline
+                    runs through informal pathways, not formal club structures.<br><br>
+                    <b>Cairo</b> leads on both metrics but its dominance is partly structural —
                     scouts and academies concentrate there, pulling talent from other governorates.
                   </div>
                 </div>
@@ -968,85 +1003,194 @@ elif page == "Player Origins":
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PAGE 6 — STARTER PIPELINE
+# PAGE 6 — NATIONAL TEAM PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "Starter Pipeline":
-    st.markdown("## National Team Starter Pipeline (1986–2026)")
-    st.markdown("<div style='color:#6b7280; margin-bottom:20px;'>Which governorates supplied starting berths to Egypt's national team across 40 years of international football.</div>", unsafe_allow_html=True)
+    st.markdown("## National Team Pipeline (1986–2025)")
+    st.markdown("<div style='color:#6b7280;margin-bottom:20px;font-family:Georgia,serif;'>Premier League club representation and international tournament starters by governorate — tracking Egypt's football talent pipeline across four decades.</div>", unsafe_allow_html=True)
 
-    if ssn_df.empty:
-        st.warning("Season-by-season data could not be loaded.")
-    else:
-        # Available governorate columns
-        avail_govs = [c for c in gov_cols if c in ssn_df.columns and ssn_df[c].sum() > 0]
+    tab_pl, tab_gov, tab_players, tab_clubs = st.tabs([
+        "Premier League geography", "Tournament starters by governorate",
+        "Most capped players", "Club contribution"
+    ])
 
-        col_s1, col_s2 = st.columns([2,1])
-        with col_s1:
-            selected_govs = st.multiselect(
-                "Compare governorates", avail_govs,
-                default=avail_govs[:6] if len(avail_govs) >= 6 else avail_govs)
-        with col_s2:
-            chart_type = st.radio("Chart type", ["Line","Area","Bar"], horizontal=True)
-
-        plot_df = ssn_df[["Season"] + [g for g in selected_govs if g in ssn_df.columns]].copy()
-        plot_df = plot_df.melt(id_vars="Season", var_name="Governorate", value_name="Starting berths")
-        plot_df["Starting berths"] = pd.to_numeric(plot_df["Starting berths"], errors="coerce").fillna(0)
-
-        if chart_type == "Line":
-            fig_pipe = px.line(plot_df, x="Season", y="Starting berths",
-                               color="Governorate", markers=True,
-                               template="plotly_white", height=420)
-        elif chart_type == "Area":
-            fig_pipe = px.area(plot_df, x="Season", y="Starting berths",
-                               color="Governorate",
-                               template="plotly_white", height=420)
+    # ── TAB 1: PL Club representation over time ──────────────────────────────
+    with tab_pl:
+        st.markdown("#### Premier League clubs by governorate — season by season")
+        st.markdown("<div style='color:#6b7280;font-size:0.88rem;font-family:Georgia,serif;margin-bottom:12px;'>How many clubs from each governorate competed in Egypt's Premier League each season. Shows the structural centralisation of Egyptian football over time.</div>", unsafe_allow_html=True)
+        if ssn_df.empty:
+            st.warning("Season-by-season data could not be loaded.")
         else:
-            fig_pipe = px.bar(plot_df, x="Season", y="Starting berths",
-                              color="Governorate", barmode="stack",
-                              template="plotly_white", height=420)
+            avail_govs = [c for c in gov_cols if c in ssn_df.columns and ssn_df[c].sum() > 0]
+            col_s1, col_s2 = st.columns([2,1])
+            with col_s1:
+                selected_govs = st.multiselect("Compare governorates", avail_govs,
+                    default=avail_govs[:6] if len(avail_govs)>=6 else avail_govs)
+            with col_s2:
+                chart_type = st.radio("Chart type", ["Line","Area","Bar"], horizontal=True)
 
-        fig_pipe.update_layout(margin=dict(t=10,b=10), xaxis_title="",
-                                xaxis_tickangle=-45, yaxis_title="Starting berths")
-        st.plotly_chart(apply_theme(fig_pipe), use_container_width=True)
+            plot_df = ssn_df[["Season"]+[g for g in selected_govs if g in ssn_df.columns]].copy()
+            plot_df = plot_df.melt(id_vars="Season", var_name="Governorate", value_name="Clubs")
+            plot_df["Clubs"] = pd.to_numeric(plot_df["Clubs"], errors="coerce").fillna(0)
 
-        st.markdown("<hr>", unsafe_allow_html=True)
+            if chart_type=="Line":
+                fig_pl=px.line(plot_df,x="Season",y="Clubs",color="Governorate",markers=True,template="plotly_white",height=400)
+            elif chart_type=="Area":
+                fig_pl=px.area(plot_df,x="Season",y="Clubs",color="Governorate",template="plotly_white",height=400)
+            else:
+                fig_pl=px.bar(plot_df,x="Season",y="Clubs",color="Governorate",barmode="stack",template="plotly_white",height=400)
+            fig_pl.update_layout(margin=dict(t=10,b=10),xaxis_tickangle=-45,yaxis_title="Clubs in Premier League")
+            st.plotly_chart(apply_theme(fig_pl), use_container_width=True)
 
-        # Totals summary
-        col_t1, col_t2 = st.columns(2)
-        with col_t1:
-            st.markdown("### All-time totals by governorate")
-            if avail_govs:
+            col_t1, col_t2 = st.columns(2)
+            with col_t1:
                 totals = ssn_df[avail_govs].sum().sort_values(ascending=True).reset_index()
-                totals.columns = ["Governorate","Total starting berths"]
-                fig_tot = px.bar(totals, y="Governorate", x="Total starting berths",
-                                  orientation="h", color="Total starting berths",
-                                  color_continuous_scale=["#dbeafe","#1d4ed8"],
-                                  template="plotly_white", height=400)
-                fig_tot.update_layout(margin=dict(t=10,b=10), coloraxis_showscale=False)
+                totals.columns = ["Governorate","Total seasons with PL clubs"]
+                fig_tot=px.bar(totals,y="Governorate",x="Total seasons with PL clubs",orientation="h",
+                    color="Total seasons with PL clubs",color_continuous_scale=["#dbeafe","#1d4ed8"],
+                    template="plotly_white",height=420)
+                fig_tot.update_layout(margin=dict(t=10,b=10),coloraxis_showscale=False)
                 st.plotly_chart(apply_theme(fig_tot), use_container_width=True)
+            with col_t2:
+                if "Cairo/Giza" in ssn_df.columns and "TOTAL" in ssn_df.columns:
+                    dom=ssn_df[["Season","Cairo/Giza","TOTAL"]].copy()
+                    dom["Cairo/Giza"]=pd.to_numeric(dom["Cairo/Giza"],errors="coerce")
+                    dom["TOTAL"]=pd.to_numeric(dom["TOTAL"],errors="coerce")
+                    dom=dom.dropna()
+                    dom["Share %"]=(dom["Cairo/Giza"]/dom["TOTAL"]*100).round(1)
+                    fig_dom=px.line(dom,x="Season",y="Share %",template="plotly_white",height=420)
+                    fig_dom.update_traces(line_color="#2563eb")
+                    fig_dom.add_hline(y=50,line_dash="dash",line_color="#9ca3af",annotation_text="50%")
+                    fig_dom.update_layout(margin=dict(t=10,b=10),xaxis_tickangle=-45,
+                                          yaxis_title="% of PL clubs from Cairo/Giza")
+                    st.plotly_chart(apply_theme(fig_dom), use_container_width=True)
+                    st.caption("Cairo/Giza's share of Premier League clubs has grown steadily since 1986.")
+            csv_ssn = ssn_df.to_csv(index=False).encode("utf-8")
+            st.download_button("⬇️ Download PL geography data (CSV)", csv_ssn, file_name="pl_geography.csv", mime="text/csv")
 
-        with col_t2:
-            st.markdown("### Cairo/Giza dominance over time")
-            if "Cairo/Giza" in ssn_df.columns and "TOTAL" in ssn_df.columns:
-                dom_df = ssn_df[["Season","Cairo/Giza","TOTAL"]].copy()
-                dom_df["Cairo/Giza"] = pd.to_numeric(dom_df["Cairo/Giza"], errors="coerce")
-                dom_df["TOTAL"] = pd.to_numeric(dom_df["TOTAL"], errors="coerce")
-                dom_df = dom_df.dropna()
-                dom_df["Share %"] = (dom_df["Cairo/Giza"] / dom_df["TOTAL"] * 100).round(1)
-                fig_dom = px.line(dom_df, x="Season", y="Share %",
-                                   template="plotly_white", height=400)
-                fig_dom.update_traces(line_color="#2563eb")
-                fig_dom.add_hline(y=50, line_dash="dash", line_color="#9ca3af",
-                                   annotation_text="50%")
-                fig_dom.update_layout(margin=dict(t=10,b=10), xaxis_tickangle=-45,
-                                       yaxis_title="% of starting berths from Cairo/Giza")
-                st.plotly_chart(apply_theme(fig_dom), use_container_width=True)
-                st.caption("Cairo/Giza's share has grown from ~33% in 1986 to 55–60% by the 2020s.")
+    # ── TAB 2: Tournament starters by governorate ─────────────────────────────
+    with tab_gov:
+        st.markdown("#### International tournament starter appearances by governorate (1986–2025)")
+        if starters_df is None:
+            st.warning("starters_final_v11.xlsx not found. Upload it to your app folder.")
+        else:
+            by_gov_s = starters_df[starters_df["Governorate"]!=""].groupby("Governorate").agg(
+                Appearances=("Player","count"),
+                Unique_Players=("Player","nunique"),
+                Avg_Mins=("Total_Mins","mean"),
+                Tournaments=("Tournament","nunique"),
+            ).reset_index()
+            by_gov_s["Avg_Mins"] = by_gov_s["Avg_Mins"].round(0)
 
-        st.markdown("<hr>", unsafe_allow_html=True)
-        csv_ssn = ssn_df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download season-by-season data (CSV)", csv_ssn,
-                           file_name="season_by_season.csv", mime="text/csv")
+            col_e1, col_e2 = st.columns([3,2])
+            with col_e1:
+                era = st.radio("Era filter", ["All time","1986–2000","2000–2015","2015–2025"], horizontal=True)
+                if era == "1986–2000":
+                    fdf = starters_df[starters_df["Year"] <= 2000]
+                elif era == "2000–2015":
+                    fdf = starters_df[(starters_df["Year"] > 2000) & (starters_df["Year"] <= 2015)]
+                elif era == "2015–2025":
+                    fdf = starters_df[starters_df["Year"] > 2015]
+                else:
+                    fdf = starters_df.copy()
+
+            by_gov_f = fdf[fdf["Governorate"]!=""].groupby("Governorate").agg(
+                Appearances=("Player","count"), Unique_Players=("Player","nunique"),
+            ).reset_index().sort_values("Appearances", ascending=True)
+
+            fig_gov = px.bar(by_gov_f, y="Governorate", x="Appearances", orientation="h",
+                color="Appearances", color_continuous_scale=["#dbeafe","#1d4ed8"],
+                hover_data={"Unique_Players":True},
+                template="plotly_white", height=480)
+            fig_gov.update_layout(margin=dict(t=10,b=10), xaxis_title="Starter appearances",
+                                   yaxis_title="", coloraxis_showscale=False)
+            st.plotly_chart(apply_theme(fig_gov), use_container_width=True)
+
+            c1,c2,c3 = st.columns(3)
+            top_gov = by_gov_s.nlargest(1,"Appearances")
+            c1.metric("Most appearances", top_gov["Governorate"].values[0], f'{int(top_gov["Appearances"].values[0])} apps')
+            top_uniq = by_gov_s.nlargest(1,"Unique_Players")
+            c2.metric("Most unique players", top_uniq["Governorate"].values[0], f'{int(top_uniq["Unique_Players"].values[0])} players')
+            c3.metric("Governorates represented", len(by_gov_s))
+
+    # ── TAB 3: Most capped players ────────────────────────────────────────────
+    with tab_players:
+        st.markdown("#### Most capped starters in Egypt international tournaments")
+        if starters_df is None:
+            st.warning("starters_final_v11.xlsx not found.")
+        else:
+            top_p = starters_df.groupby("Player").agg(
+                Appearances=("Tournament","count"),
+                Total_Mins=("Total_Mins","sum"),
+                Tournaments=("Tournament","nunique"),
+                Governorate=("Governorate", lambda x: x[x!=""].mode()[0] if len(x[x!=""])>0 else ""),
+                Club=("Club", lambda x: x[x!=""].mode()[0] if len(x[x!=""])>0 else ""),
+            ).reset_index().sort_values(["Appearances","Total_Mins"], ascending=False).reset_index(drop=True)
+
+            col_f1, col_f2 = st.columns([1,1])
+            with col_f1:
+                gov_filter = st.selectbox("Filter by governorate", ["All"]+sorted(starters_df[starters_df["Governorate"]!=""]["Governorate"].unique().tolist()))
+            with col_f2:
+                min_apps = st.slider("Minimum appearances", 1, 7, 2)
+
+            filt_p = top_p[top_p["Appearances"] >= min_apps]
+            if gov_filter != "All":
+                filt_p = filt_p[filt_p["Governorate"] == gov_filter]
+
+            fig_top = px.bar(filt_p.head(25).sort_values("Appearances",ascending=True),
+                y="Player", x="Appearances", orientation="h",
+                color="Governorate", hover_data={"Total_Mins":True,"Club":True,"Tournaments":True},
+                template="plotly_white", height=max(350, len(filt_p.head(25))*28))
+            fig_top.update_layout(margin=dict(t=10,b=10), xaxis_title="Tournament appearances",
+                                   yaxis_title="")
+            st.plotly_chart(apply_theme(fig_top), use_container_width=True)
+            st.caption("Essam El Hadary, Ahmed Hassan and Hany Ramzy — 7 appearances each, joint most capped in the dataset.")
+
+    # ── TAB 4: Club contribution ──────────────────────────────────────────────
+    with tab_clubs:
+        st.markdown("#### Which clubs supplied the most starters to Egypt's national team?")
+        if starters_df is None:
+            st.warning("starters_final_v11.xlsx not found.")
+        else:
+            by_club = starters_df[starters_df["Club"]!=""].groupby("Club").agg(
+                Appearances=("Player","count"), Unique_Players=("Player","nunique"),
+            ).reset_index().sort_values("Appearances", ascending=False)
+
+            col_c1, col_c2 = st.columns([3,2])
+            with col_c1:
+                fig_club = px.bar(by_club.head(20).sort_values("Appearances",ascending=True),
+                    y="Club", x="Appearances", orientation="h",
+                    color="Appearances", color_continuous_scale=["#dbeafe","#1d4ed8"],
+                    hover_data={"Unique_Players":True},
+                    template="plotly_white", height=480)
+                fig_club.update_layout(margin=dict(t=10,b=10),
+                    xaxis_title="Starter appearances", yaxis_title="", coloraxis_showscale=False)
+                st.plotly_chart(apply_theme(fig_club), use_container_width=True)
+
+            with col_c2:
+                # Al Ahly vs Zamalek vs rest over time
+                st.markdown("**Al Ahly vs Zamalek vs rest**")
+                def tag_club(c):
+                    if "Al Ahly" in str(c) or c == "Ahly": return "Al Ahly"
+                    if "Zamalek" in str(c): return "Zamalek"
+                    return "Other clubs"
+                club_era = starters_df[starters_df["Club"]!=""].copy()
+                club_era["Club_Group"] = club_era["Club"].apply(tag_club)
+                club_era["Era"] = pd.cut(club_era["Year"],
+                    bins=[1985,1995,2005,2015,2025],
+                    labels=["1986–1995","1996–2005","2006–2015","2016–2025"])
+                era_club = club_era.groupby(["Era","Club_Group"]).size().reset_index(name="Appearances")
+                fig_era = px.bar(era_club, x="Era", y="Appearances", color="Club_Group",
+                    barmode="stack",
+                    color_discrete_map={"Al Ahly":"#dc2626","Zamalek":"#1d4ed8","Other clubs":"#9ca3af"},
+                    template="plotly_white", height=350)
+                fig_era.update_layout(margin=dict(t=10,b=10),
+                    xaxis_title="", yaxis_title="Starter appearances", legend_title="")
+                st.plotly_chart(apply_theme(fig_era), use_container_width=True)
+                st.caption(f"Al Ahly (72 apps) and Zamalek (44) account for over 50% of all starter appearances. Ismaily (13) is the only other club with meaningful representation.")
+
+            csv_clubs = by_club.to_csv(index=False).encode("utf-8")
+            st.download_button("⬇️ Download club data (CSV)", csv_clubs, file_name="nt_clubs.csv", mime="text/csv")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CAF OVERPERFORMANCE INDEX
@@ -1095,7 +1239,7 @@ elif page == "CAF Overperformance Index":
                     "Sao Tome","Eswatini","Equatorial Guinea"}
 
     st.markdown("<hr>", unsafe_allow_html=True)
-    tab1, tab2, tab3 = st.tabs(["Overperformance ranking", "Football vs Economy", "By zone"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Overperformance ranking", "Football Index", "Football vs Economy", "By zone"])
 
     with tab1:
         df_ov = caf_df.sort_values("Overperformance", ascending=True).copy()
@@ -1152,6 +1296,31 @@ elif page == "CAF Overperformance Index":
         """, unsafe_allow_html=True)
 
     with tab2:
+        st.markdown("#### Football Index ranking — all 54 CAF nations")
+        st.markdown("<div style='color:#6b7280;font-size:0.88rem;font-family:Georgia,serif;margin-bottom:12px;'>Football performance independent of economic context. 8 equal components: FIFA Men & Women rankings, association points, infrastructure, youth tournaments, player export volume & quality, tournament pedigree.</div>", unsafe_allow_html=True)
+        if "Football Index" in caf_df.columns:
+            fi_df = caf_df[["COUNTRY","Football Index","Zone"] + [c for c in caf_df.columns if c in
+                ["FIFA Men","FIFA Women","Assoc Points","Infrastructure","Youth Score",
+                 "Export Vol","Export Quality","Pedigree"]]].sort_values("Football Index",ascending=True).copy()
+            fig_fi = px.bar(fi_df, y="COUNTRY", x="Football Index", orientation="h",
+                color="Football Index",
+                color_continuous_scale=["#dbeafe","#1d4ed8"],
+                hover_data={c:True for c in fi_df.columns if c not in ["COUNTRY","Football Index"]},
+                template="plotly_white", height=950)
+            fig_fi.update_layout(margin=dict(t=10,b=10),
+                xaxis_title="Football Index (0–1)", yaxis_title="", coloraxis_showscale=False)
+            st.plotly_chart(apply_theme(fig_fi), use_container_width=True)
+
+            top3 = caf_df.nlargest(3,"Football Index")[["COUNTRY","Football Index"]].reset_index(drop=True)
+            c1,c2,c3 = st.columns(3)
+            for col,(i,row) in zip([c1,c2,c3], top3.iterrows()):
+                medal = ["🥇","🥈","🥉"][i]
+                col.markdown(f"""<div class='metric-card'>
+                  <div class='metric-value' style='font-size:1.2rem;'>{medal} {row["COUNTRY"]}</div>
+                  <div class='metric-label'>Football Index {row["Football Index"]:.4f}</div>
+                </div>""", unsafe_allow_html=True)
+
+    with tab3:
         hover_cols = {"Overperformance":":.3f","Classification":True}
         if "Zone" in caf_df.columns: hover_cols["Zone"] = True
         fig_sc = px.scatter(caf_df.dropna(subset=["Economic Index","Football Index"]),
@@ -1170,7 +1339,7 @@ elif page == "CAF Overperformance Index":
         st.plotly_chart(apply_theme(fig_sc), use_container_width=True)
         st.caption("Above the diagonal = overperforms. Below = underperforms.")
 
-    with tab3:
+    with tab4:
         if "Zone" in caf_df.columns:
             zone_avg = caf_df.groupby("Zone").agg(
                 Countries=("COUNTRY","count"),
