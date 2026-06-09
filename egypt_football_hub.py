@@ -480,7 +480,9 @@ if page == PAGES[0]:
     if caf_df is not None:
         top_over = caf_df.loc[caf_df["Overperformance"].idxmax(), "COUNTRY"]
         top_foot = caf_df.loc[caf_df["Football Index"].idxmax(), "COUNTRY"]
-        top_under = caf_df.loc[caf_df["Overperformance"].idxmin(), "COUNTRY"]
+        _micro = {"Seychelles","Mauritius","Cape Verde","Comoros","Djibouti","Sao Tome","Eswatini","Equatorial Guinea"}
+        _caf_f = caf_df[~caf_df["COUNTRY"].isin(_micro)]
+        top_under = _caf_f.loc[_caf_f["Overperformance"].idxmin(), "COUNTRY"]
         n_over = int((caf_df["Overperformance"] > 0.08).sum())
         a1,a2,a3,a4 = st.columns(4)
         for col,(val,label) in zip([a1,a2,a3,a4],[
