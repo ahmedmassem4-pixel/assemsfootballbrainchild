@@ -96,7 +96,8 @@ PYRAMID_FILE   = "Egyptian_Football_Pyramid.xlsx"
 STARTERS_FILE       = "Starters_team_breakdown.xlsx"
 STARTERS_FINAL_FILE = "starters_final_v11.xlsx"
 CAF_FILE         = "caf_index_v3.xlsx"
-URBAN_POP_FILE   = "egypt_populations_final.csv"
+URBAN_POP_FILE      = "egypt_populations_final.csv"
+FACILITIES_FILE     = "sports_facilities_2024.xlsx"
 
 PLOTLY_THEME = dict(
     template="plotly_white",
@@ -294,6 +295,41 @@ def load_caf():
     return df, ped
 
 @st.cache_data
+def load_facilities():
+    if not os.path.exists(FACILITIES_FILE):
+        return None
+    xl = pd.ExcelFile(FACILITIES_FILE)
+    raw = xl.parse("جدول Table 1", header=None)
+    data_rows = raw.iloc[8:35].copy()
+    fac = pd.DataFrame({
+        "Clubs_Gov":      pd.to_numeric(data_rows[1], errors="coerce"),
+        "Clubs_Public":   pd.to_numeric(data_rows[2], errors="coerce"),
+        "Clubs_Private":  pd.to_numeric(data_rows[3], errors="coerce"),
+        "Clubs_Total":    pd.to_numeric(data_rows[4], errors="coerce"),
+        "Youth_Cities":   pd.to_numeric(data_rows[5], errors="coerce"),
+        "Youth_Villages": pd.to_numeric(data_rows[6], errors="coerce"),
+        "Youth_Total":    pd.to_numeric(data_rows[7], errors="coerce"),
+        "Grand_Total":    pd.to_numeric(data_rows[8], errors="coerce"),
+        "Governorate_EN": data_rows[9].values,
+    })
+    name_map = {
+        "Cairo":"Cairo","Alexandria":"Alexandria","Portsaid":"Port Said",
+        "Suez":"Suez","Damietta":"Damietta","Dakahlia":"Dakahlia",
+        "Sharkia":"Sharkia","Kalyoubia":"Qalyubia","Kafr El Sheikh":"Kafr El Sheikh",
+        "Gharbia":"Gharbia","Monoufia":"Menoufia","Behera":"Beheira",
+        "Ismailia":"Ismailia","Giza":"Giza","Beni Suef":"Beni Suef",
+        "Fayoum":"Fayoum","Menia":"Minya","Assuit":"Assiut",
+        "Sohag":"Sohag","Qena":"Qena","Aswan":"Aswan","Luxor":"Luxor",
+        "The Red Sea":"Red Sea","El Wadi ElGidid":"New Valley",
+        "Matrouh":"Matrouh","North Sinai":"North Sinai","south sinai":"South Sinai",
+    }
+    fac["Governorate"] = fac["Governorate_EN"].str.strip().map(name_map).fillna(fac["Governorate_EN"].str.strip())
+    fac = fac[fac["Grand_Total"].notna()].reset_index(drop=True)
+    fac["Urban_Facilities"] = fac["Clubs_Total"] + fac["Youth_Cities"]
+    fac["Rural_Facilities"]  = fac["Youth_Villages"]
+    return fac
+
+@st.cache_data
 def load_urban():
     if not os.path.exists(URBAN_POP_FILE):
         return None
@@ -413,6 +449,7 @@ caf_result = load_caf()
 starters_df = load_starters_final()
 caf_df, ped_df = caf_result if caf_result else (None, None)
 urban_df = load_urban()
+facilities_df = load_facilities()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — OVERVIEW
@@ -626,7 +663,7 @@ elif page == "Governorate Intelligence":
         col_m2.metric("Highest football score", top_score)
         col_m3.metric("Lowest GDP per capita", gdp_low)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Overperformance ranking", "Urban vs Rural & football", "Map", "Combined Football Output"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overperformance ranking", "Urban vs Rural & football", "Map", "Combined Football Output", "Sporting Infrastructure"])
 
     with tab1:
         if ov_col in govs.columns:
@@ -848,6 +885,170 @@ elif page == "Governorate Intelligence":
                 """, unsafe_allow_html=True)
         except Exception as e:
             st.warning(f"Could not compute combined output: {e}")
+
+    with tab5:
+        st.markdown("#### Sporting Infrastructure — Egypt Governorates (2024)")
+        st.markdown("""<div style='color:#6b7280;font-family:Georgia,serif;font-size:0.88rem;
+            margin-bottom:16px;line-height:1.6;'>
+            Sports establishments from Egypt's Central Agency for Public Mobilization & Statistics (CAPMAS) 2024.
+            Split between <b>urban facilities</b> (clubs + city youth centres) and
+            <b>rural facilities</b> (village youth centres). Per-capita figures per 100,000 population.
+            <br><span style='color:#dc2626;'><b>Excluded from findings:</b> New Valley, South Sinai,
+            North Sinai, Red Sea — frontier/desert governorates where small populations and vast
+            uninhabited areas make per-capita metrics misleading.</span>
+        </div>""", unsafe_allow_html=True)
+
+        FRONTIER = {"New Valley","South Sinai","North Sinai","Red Sea"}
+
+        if facilities_df is not None and urban_df is not None:
+            # Merge facilities with urban/rural population
+            upop = urban_df.copy() if urban_df is not None else pd.DataFrame()
+            fac = facilities_df.copy()
+
+            if not upop.empty:
+                fac = fac.merge(upop[["Governorate","Urban_Total","Rural_Total","Total_Population"]],
+                                on="Governorate", how="left")
+            fac = fac.merge(govs[["Governorate","Score"]].copy(), on="Governorate", how="left")
+            fac["Score"] = pd.to_numeric(fac["Score"], errors="coerce")
+
+            if "Total_Population" in fac.columns:
+                for c in ["Urban_Total","Rural_Total","Total_Population","Urban_Facilities","Rural_Facilities","Grand_Total"]:
+                    if c in fac.columns:
+                        fac[c] = pd.to_numeric(fac[c], errors="coerce").astype(float)
+                fac["Urban_per_100k"] = (fac["Urban_Facilities"] / fac["Urban_Total"].where(fac["Urban_Total"]>0) * 100000).round(1)
+                fac["Rural_per_100k"] = (fac["Rural_Facilities"] / fac["Rural_Total"].where(fac["Rural_Total"]>0) * 100000).round(1)
+                fac["Total_per_100k"] = (fac["Grand_Total"] / fac["Total_Population"].where(fac["Total_Population"]>0) * 100000).round(1)
+
+            fac_filtered = fac[~fac["Governorate"].isin(FRONTIER)].copy()
+
+            sub1, sub2 = st.tabs(["Urban infrastructure", "Rural grassroots pipeline"])
+
+            with sub1:
+                st.markdown("##### Urban facilities per 100,000 urban population")
+                col_u1, col_u2 = st.columns([3,2])
+                with col_u1:
+                    if "Urban_per_100k" in fac_filtered.columns:
+                        fig_urb = px.bar(
+                            fac_filtered.dropna(subset=["Urban_per_100k"]).sort_values("Urban_per_100k", ascending=True),
+                            y="Governorate", x="Urban_per_100k", orientation="h",
+                            color="Urban_per_100k",
+                            color_continuous_scale=["#fef3c7","#f59e0b","#b45309"],
+                            hover_data={"Clubs_Total":True,"Youth_Cities":True,"Urban_per_100k":":.1f"},
+                            template="plotly_white", height=560,
+                            labels={"Urban_per_100k":"Urban facilities per 100k"},
+                        )
+                        fig_urb.update_layout(margin=dict(t=10,b=10),
+                            xaxis_title="Urban facilities per 100,000 urban pop",
+                            yaxis_title="", coloraxis_showscale=False)
+                        st.plotly_chart(apply_theme(fig_urb), use_container_width=True)
+
+                with col_u2:
+                    st.markdown("##### Private clubs as % of total clubs")
+                    fac_filtered["Private_Pct"] = (fac_filtered["Clubs_Private"] / fac_filtered["Clubs_Total"].replace(0,pd.NA) * 100).round(1)
+                    fig_prv = px.bar(
+                        fac_filtered.dropna(subset=["Private_Pct"]).sort_values("Private_Pct", ascending=True),
+                        y="Governorate", x="Private_Pct", orientation="h",
+                        color="Private_Pct",
+                        color_continuous_scale=["#dbeafe","#1d4ed8"],
+                        template="plotly_white", height=560,
+                        labels={"Private_Pct":"Private clubs %"},
+                    )
+                    fig_prv.update_layout(margin=dict(t=10,b=10),
+                        xaxis_title="Private clubs as % of total clubs",
+                        yaxis_title="", coloraxis_showscale=False)
+                    st.plotly_chart(apply_theme(fig_prv), use_container_width=True)
+
+                st.markdown("""<div style='background:#fffbeb;border:1px solid #fde68a;border-left:3px solid #f59e0b;
+                    border-radius:8px;padding:14px 18px;font-family:Georgia,serif;font-size:0.88rem;color:#78350f;
+                    margin-top:8px;'>
+                    <b>Cairo paradox:</b> Despite having the most absolute urban facilities (168),
+                    Cairo ranks last in urban facilities per 100k urban population (1.6).
+                    Players emerge through private academies and club networks —
+                    not public sporting infrastructure. High private club % confirms this.
+                </div>""", unsafe_allow_html=True)
+
+            with sub2:
+                st.markdown("##### Village youth centres — the grassroots pipeline")
+                col_r1, col_r2 = st.columns([3,2])
+                with col_r1:
+                    fig_rur = px.bar(
+                        fac_filtered.sort_values("Youth_Villages", ascending=True),
+                        y="Governorate", x="Youth_Villages", orientation="h",
+                        color="Score",
+                        color_continuous_scale=["#fecaca","#d1fae5","#059669"],
+                        hover_data={"Rural_per_100k":True,"Score":True},
+                        template="plotly_white", height=560,
+                        labels={"Youth_Villages":"Village youth centres","Score":"Football score"},
+                    )
+                    fig_rur.update_layout(margin=dict(t=10,b=10),
+                        xaxis_title="Village youth centres (absolute)",
+                        yaxis_title="", coloraxis_showscale=True,
+                        coloraxis_colorbar=dict(title="Football<br>score"))
+                    st.plotly_chart(apply_theme(fig_rur), use_container_width=True)
+
+                with col_r2:
+                    st.markdown("##### Football score vs village youth centres")
+                    if "Urban_per_100k" in fac_filtered.columns:
+                        fig_sc = px.scatter(
+                            fac_filtered.dropna(subset=["Score","Youth_Villages"]),
+                            x="Youth_Villages", y="Score",
+                            text="Governorate",
+                            color="Score",
+                            color_continuous_scale=["#fecaca","#d1fae5","#059669"],
+                            size="Youth_Villages", size_max=30,
+                            template="plotly_white", height=560,
+                            labels={"Youth_Villages":"Village youth centres","Score":"Football score"},
+                        )
+                        fig_sc.update_traces(textposition="top center", textfont_size=8)
+                        fig_sc.update_layout(margin=dict(t=10,b=10), coloraxis_showscale=False)
+                        st.plotly_chart(apply_theme(fig_sc), use_container_width=True)
+
+                st.markdown("""<div style='background:#f0fdf4;border:1px solid #bbf7d0;border-left:3px solid #16a34a;
+                    border-radius:8px;padding:14px 18px;font-family:Georgia,serif;font-size:0.88rem;color:#14532d;
+                    margin-top:8px;line-height:1.7;'>
+                    <b>Dakahlia (425) and Beheira (416)</b> lead in village youth centres —
+                    the infrastructure that feeds Egypt's grassroots talent pipeline.<br>
+                    <b>Sharkia (405)</b> has the second most village youth centres in Egypt but a football
+                    score of only 1 — the infrastructure exists but isn't converting to formal club output.<br>
+                    <b>Cairo and Giza: zero village youth centres.</b>
+                    Their dominance in the national team is built entirely on urban academies, not grassroots sport.
+                </div>""", unsafe_allow_html=True)
+        else:
+            st.warning("sports_facilities_2024.xlsx not found. Upload it to your app folder.")
+
+        # Key findings box
+        st.markdown("""
+        <div style='background:#f0f4ff;border:1px solid #c7d7f9;border-radius:8px;
+                    padding:18px 22px;margin-top:16px;font-family:Georgia,serif;color:#1e3a5f;'>
+          <div style='font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;
+                      color:#6b7280;margin-bottom:12px;'>Key findings after excluding frontier governorates</div>
+          <div style='font-size:0.9rem;line-height:1.85;'>
+            <b>Ismailia</b> is the only governorate that ranks highly on both dimensions —
+            6.6 urban facilities per 100k urban population (3rd) and 12.6 rural facilities
+            per 100k rural population (3rd). This dual strength explains its consistent
+            overperformance in football output relative to its size.<br><br>
+            <b>Aswan</b> leads urban facility density at 6.8 per 100k — higher than Alexandria
+            and Cairo despite being a fraction of their size. Its facilities are genuinely
+            accessible to its population in a way the megacities are not.<br><br>
+            <b>Cairo and Giza</b> rank last and second-last in urban facilities per 100k at
+            1.6 and 1.5. Qalyubia, essentially a Cairo suburb with 6.3 million people,
+            sits at 1.4 — the worst in Egypt. These three governorates produce players
+            through private academies and club networks, not public sporting infrastructure.<br><br>
+            <b>Damietta</b> is underappreciated — 9.3 rural facilities per 100k rural population,
+            among the highest in the Delta. A small governorate quietly well-served for
+            grassroots football.<br><br>
+            <b>Sharkia remains the standout paradox:</b> 405 village youth centres (2nd highest
+            in Egypt) yet a formal football infrastructure score of just 1. The grassroots
+            facilities exist but talent is not converting to local club output — players
+            almost certainly migrate to Cairo academies rather than developing locally.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        csv_fac = facilities_df.to_csv(index=False).encode("utf-8") if facilities_df is not None else b""
+        if csv_fac:
+            st.download_button("⬇️ Download facilities data (CSV)", csv_fac,
+                               file_name="egypt_sports_facilities.csv", mime="text/csv")
 
     csv_gov = govs[show_cols].sort_values("Overperformance Index", ascending=False).to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download governorate data (CSV)", csv_gov,
