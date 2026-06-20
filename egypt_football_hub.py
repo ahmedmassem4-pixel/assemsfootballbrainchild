@@ -680,6 +680,12 @@ elif page == "Governorate Intelligence":
             fig_ov.add_vline(x=0, line_color="#9ca3af", line_dash="dash")
             st.plotly_chart(apply_theme(fig_ov), use_container_width=True)
             st.caption("Positive = overperforms relative to GDP per capita and population.")
+            st.markdown("""<div style='font-size:0.8rem;color:#6b7280;font-family:Georgia,serif;
+                font-style:italic;margin-top:4px;padding:0 4px;'>
+                Note: infrastructure score reflects formal club presence across the pyramid only.
+                Public sporting facilities (youth centres, state clubs) tell a different story —
+                see the <b>Sporting Infrastructure</b> tab for Dakahlia and Sharkia specifically.
+                </div>""", unsafe_allow_html=True)
             # Only exclude Score 0 or 1 — truly no ecosystem
             excluded = ["New Valley","North Sinai","South Sinai"]
             excluded_str = ", ".join(sorted(excluded)) if excluded else ""
@@ -862,9 +868,11 @@ elif page == "Governorate Intelligence":
                     <b>Ismailia</b>, despite a population of only {ism_pop_str} — one of Egypt's
                     smallest governorates — has a consistently high combined football output score,
                     producing a disproportionate number of international players relative to its size.<br><br>
-                    <b>Dakahlia</b> is widely regarded as Egypt's biggest talent hub, yet in 2026
-                    its infrastructure score is among the lowest in the dataset. The talent pipeline
-                    runs through informal pathways, not formal club structures.<br><br>
+                    <b>Dakahlia</b> is widely regarded as Egypt's biggest talent hub — and the
+                    facilities data backs this up. It has the highest total sports facilities (470)
+                    and village youth centres (425) of any governorate, yet its formal football
+                    pyramid score is only 8. The grassroots infrastructure is there; the talent
+                    migrates to Cairo clubs rather than building local club structures.<br><br>
                     <b>Cairo</b> leads on both metrics but its dominance is partly structural —
                     scouts and academies concentrate there, pulling talent from other governorates.
                   </div>
@@ -987,21 +995,21 @@ elif page == "Governorate Intelligence":
                     st.plotly_chart(apply_theme(fig_rur), use_container_width=True)
 
                 with col_r2:
-                    st.markdown("##### Football score vs village youth centres")
-                    if "Urban_per_100k" in fac_filtered.columns:
-                        fig_sc = px.scatter(
-                            fac_filtered.dropna(subset=["Score","Youth_Villages"]),
-                            x="Youth_Villages", y="Score",
-                            text="Governorate",
-                            color="Score",
-                            color_continuous_scale=["#fecaca","#d1fae5","#059669"],
-                            size="Youth_Villages", size_max=30,
-                            template="plotly_white", height=560,
-                            labels={"Youth_Villages":"Village youth centres","Score":"Football score"},
-                        )
-                        fig_sc.update_traces(textposition="top center", textfont_size=8)
-                        fig_sc.update_layout(margin=dict(t=10,b=10), coloraxis_showscale=False)
-                        st.plotly_chart(apply_theme(fig_sc), use_container_width=True)
+                    st.markdown("##### Village youth centres per 100k rural population")
+                    fig_sc = px.bar(
+                        fac_filtered.dropna(subset=["Rural_per_100k"]).sort_values("Rural_per_100k", ascending=True),
+                        y="Governorate", x="Rural_per_100k", orientation="h",
+                        color="Rural_per_100k",
+                        color_continuous_scale=["#fecaca","#d1fae5","#059669"],
+                        hover_data={"Youth_Villages":True,"Score":True},
+                        template="plotly_white", height=560,
+                        labels={"Rural_per_100k":"Village YC per 100k rural pop"},
+                    )
+                    fig_sc.update_layout(margin=dict(t=10,b=10),
+                        xaxis_title="Village youth centres per 100k rural population",
+                        yaxis_title="", coloraxis_showscale=False)
+                    st.plotly_chart(apply_theme(fig_sc), use_container_width=True)
+                    st.caption("Controls for rural population size. Shows which governorates are genuinely well-served vs just large.")
 
                 st.markdown("""<div style='background:#f0fdf4;border:1px solid #bbf7d0;border-left:3px solid #16a34a;
                     border-radius:8px;padding:14px 18px;font-family:Georgia,serif;font-size:0.88rem;color:#14532d;
@@ -1010,8 +1018,10 @@ elif page == "Governorate Intelligence":
                     the infrastructure that feeds Egypt's grassroots talent pipeline.<br>
                     <b>Sharkia (405)</b> has the second most village youth centres in Egypt but a football
                     score of only 1 — the infrastructure exists but isn't converting to formal club output.<br>
-                    <b>Cairo and Giza: zero village youth centres.</b>
-                    Their dominance in the national team is built entirely on urban academies, not grassroots sport.
+                    <b>Cairo, Port Said and Suez have zero rural population</b> — entirely
+                    urban, village youth centres are structurally absent. <b>Giza</b> however
+                    has 3.95M rural residents but only 4.3 village youth centres per 100k
+                    rural population — a genuine grassroots gap in Egypt's most football-dominant governorate.
                 </div>""", unsafe_allow_html=True)
         else:
             st.warning("sports_facilities_2024.xlsx not found. Upload it to your app folder.")
@@ -1030,10 +1040,12 @@ elif page == "Governorate Intelligence":
             <b>Aswan</b> leads urban facility density at 6.8 per 100k — higher than Alexandria
             and Cairo despite being a fraction of their size. Its facilities are genuinely
             accessible to its population in a way the megacities are not.<br><br>
-            <b>Cairo and Giza</b> rank last and second-last in urban facilities per 100k at
-            1.6 and 1.5. Qalyubia, essentially a Cairo suburb with 6.3 million people,
-            sits at 1.4 — the worst in Egypt. These three governorates produce players
-            through private academies and club networks, not public sporting infrastructure.<br><br>
+            <b>Cairo, Giza and Qalyubia</b> rank last in urban facilities per 100k at 1.6, 1.5
+            and 1.4 respectively. Cairo is 100% urban with zero rural population — village
+            youth centres are structurally absent. Giza however has 3.95M rural residents
+            yet only 4.3 village youth centres per 100k rural population, one of the lowest
+            in Egypt — a genuine rural infrastructure gap despite its football dominance.
+            Players from both governorates develop through private academies and club networks.<br><br>
             <b>Damietta</b> is underappreciated — 9.3 rural facilities per 100k rural population,
             among the highest in the Delta. A small governorate quietly well-served for
             grassroots football.<br><br>
